@@ -1,0 +1,36 @@
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# AWS SAM build files
+.aws-sam/
+samconfig.toml
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Node.js and React
+node_modules/
+dist/
+build/
+
+# Test and coverage output
+.coverage
+htmlcov/
+coverage/
+
+# Log files
+*.log
+
+# Development tools
+.vscode/
+.idea/
+
+# Operating-system files
+.DS_Store
+Thumbs.db
