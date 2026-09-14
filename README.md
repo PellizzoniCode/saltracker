@@ -10,30 +10,32 @@ The application will help an organization register, locate, assign and maintain 
 
 An authenticated user can:
 
-- Log in and log out
-- Reset their password
-- Access protected application pages
-- Manually create an asset
-- View asset records
-- Search for assets
+* Log in and log out
+* Reset their password
+* Access protected application pages
+* Manually create an asset
+* View asset records
+* Search for assets
 
 An unauthenticated user cannot access the application or its protected API.
 
 ## Planned AWS Services
 
-- AWS Amplify
-- Amazon Cognito
-- Amazon API Gateway
-- AWS Lambda
-- Amazon DynamoDB
-- Amazon S3
-- Amazon Bedrock
-- Amazon EventBridge
-- Amazon SNS
-- Amazon CloudWatch
-- AWS SAM
+* AWS Amplify
+* Amazon Cognito
+* Amazon API Gateway
+* AWS Lambda
+* Amazon DynamoDB
+* Amazon S3
+* Amazon Bedrock
+* Amazon EventBridge
+* Amazon SNS
+* Amazon CloudWatch
+* AWS SAM
 
 ## Project Status
+
+Week 1 — Authentication and core asset management.
 
 ## Architecture
 
@@ -41,15 +43,15 @@ The architecture is developed cumulatively across the four project weeks. Each w
 
 ### Complete Target Architecture
 
-The complete architecture represents the final serverless application after all four project weeks.
+The complete target architecture represents the final serverless application after all four project weeks.
 
-![Complete AWS architecture](docs/architecture/smart-asset-tracker-full-architecture.png)
+![Complete AWS architecture](docs/architecture/smart-asset-tracker-week-4-architecture.png)
 
 ### Weekly Architecture Progression
 
 #### Week 1 — Authentication and Core Asset Management
 
-Week 1 establishes the foundation: the Amplify frontend, Cognito authentication, protected API Gateway endpoints, Lambda application logic and DynamoDB asset storage.
+Week 1 establishes the application foundation with an Amplify frontend, Cognito authentication, protected API Gateway endpoints, Lambda application logic and DynamoDB asset storage.
 
 ![Week 1 architecture](docs/architecture/smart-asset-tracker-week-1-architecture.png)
 
@@ -65,13 +67,20 @@ Week 3 extends the previous architecture with depreciation calculations, mainten
 
 ![Week 3 architecture](docs/architecture/smart-asset-tracker-week-3-architecture.png)
 
-#### Week 4 — Security, Monitoring and Deployment
+#### Week 4 — Security, Monitoring and Final Deployment
 
-Week 4 completes the architecture with CloudWatch monitoring, security hardening, testing and repeatable Infrastructure-as-Code deployment.
+Week 4 completes the target architecture shown at the beginning of this section. A second Week 4 diagram is not displayed because the Week 4 architecture is the complete target architecture.
 
-![Week 4 architecture](docs/architecture/smart-asset-tracker-week-4-architecture.png)
+During Week 4, the team will:
 
-Week 1 — Authentication and core asset management.
+* Complete backend role-based authorization
+* Apply least-privilege IAM permissions
+* Secure access to private S3 images
+* Configure CloudWatch logs and alarms
+* Test unauthorized and unsuccessful requests
+* Complete the AWS SAM deployment
+* Review the application for exposed credentials
+* Prepare the project documentation and final demonstration
 
 ## Security
 
