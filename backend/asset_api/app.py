@@ -8,6 +8,8 @@ from decimal import Decimal
 
 import boto3
 from boto3.dynamodb.conditions import Attr
+from boto3.dynamodb.types import TypeSerializer
+from botocore.exceptions import ClientError
 
 from domain import (
     ValidationError,
@@ -15,13 +17,20 @@ from domain import (
     can_read,
     parse_groups,
     validate_asset,
+    validate_create_permissions,
     validate_update_permissions,
 )
 
 
 LOGGER = logging.getLogger()
 LOGGER.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
-TABLE = boto3.resource("dynamodb").Table(os.environ["ASSET_TABLE_NAME"])
+TABLE_NAME = os.environ["ASSET_TABLE_NAME"]
+TABLE = boto3.resource("dynamodb").Table(TABLE_NAME)
+_SERIALIZER = TypeSerializer()
+
+
+def _serialize(item):
+    return {key: _SERIALIZER.serialize(value) for key, value in item.items()}
 
 
 def response(status_code, body):
@@ -60,6 +69,15 @@ def _asset_key(asset_id):
     return {"PK": f"ASSET#{asset_id}", "SK": "METADATA"}
 
 
+def _asset_tag_key(asset_tag):
+    return {"PK": f"ASSETTAG#{asset_tag}", "SK": "UNIQUE"}
+
+
+def _tag_conflict(exc):
+    reasons = exc.response.get("CancellationReasons", [])
+    return len(reasons) > 1 and reasons[1].get("Code") == "ConditionalCheckFailed"
+
+
 def _clean_asset(item):
     if not item:
         return None
@@ -70,27 +88,22 @@ def _create(event, claims, groups):
     if not can_create(groups):
         return response(403, {"error": "Forbidden", "message": "You do not have permission to create assets."})
 
-    payload = _body(event)    
+    payload = _body(event)
     validate_asset(payload)
-    duplicate = TABLE.scan(
-        FilterExpression=Attr("assetTag").eq(payload["assetTag"]),
-        ProjectionExpression="assetId",
-        Limit=1,
-    )
-    if duplicate.get("Count", 0):
+    if not validate_create_permissions(groups, payload):
         return response(
-            409,
+            403,
             {
-                "error": "Conflict",
-                "message": "An asset with this asset tag already exists.",
+                "error": "Forbidden",
+                "message": "Only an Administrator can set assignment fields on a new asset.",
             },
         )
+
     asset_id = f"AST-{uuid.uuid4().hex[:8].upper()}"
     now = datetime.now(timezone.utc).isoformat()
     item = {
         **payload,
-        "PK": f"ASSET#{asset_id}",
-        "SK": "METADATA",
+        **_asset_key(asset_id),
         "assetId": asset_id,
         "depreciationMethod": payload.get("depreciationMethod", "straight-line"),
         "reviewStatus": payload.get("reviewStatus", "ManualEntry"),
@@ -100,10 +113,32 @@ def _create(event, claims, groups):
     }
     item["purchaseValue"] = Decimal(str(item["purchaseValue"]))
     item["salvageValue"] = Decimal(str(item["salvageValue"]))
+    lock_item = {**_asset_tag_key(payload["assetTag"]), "assetId": asset_id}
 
     try:
-        TABLE.put_item(Item=item, ConditionExpression="attribute_not_exists(PK)")
-    except TABLE.meta.client.exceptions.ConditionalCheckFailedException:
+        TABLE.meta.client.transact_write_items(
+            TransactItems=[
+                {
+                    "Put": {
+                        "TableName": TABLE_NAME,
+                        "Item": _serialize(item),
+                        "ConditionExpression": "attribute_not_exists(PK)",
+                    }
+                },
+                {
+                    "Put": {
+                        "TableName": TABLE_NAME,
+                        "Item": _serialize(lock_item),
+                        "ConditionExpression": "attribute_not_exists(PK)",
+                    }
+                },
+            ]
+        )
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] != "TransactionCanceledException":
+            raise
+        if _tag_conflict(exc):
+            return response(409, {"error": "Conflict", "message": "An asset with this asset tag already exists."})
         return response(409, {"error": "Conflict", "message": "Asset ID already exists."})
 
     LOGGER.info("Asset created assetId=%s actorSub=%s", asset_id, claims.get("sub"))
@@ -158,7 +193,45 @@ def _update(event, asset_id, claims, groups):
     candidate["salvageValue"] = Decimal(str(candidate["salvageValue"]))
     candidate["updatedAt"] = datetime.now(timezone.utc).isoformat()
     candidate["updatedBy"] = claims.get("sub")
-    TABLE.put_item(Item={**candidate, **_asset_key(asset_id)}, ConditionExpression="attribute_exists(PK)")
+
+    old_tag = existing.get("assetTag")
+    new_tag = candidate.get("assetTag")
+
+    if new_tag != old_tag:
+        try:
+            TABLE.meta.client.transact_write_items(
+                TransactItems=[
+                    {
+                        "Put": {
+                            "TableName": TABLE_NAME,
+                            "Item": _serialize({**candidate, **_asset_key(asset_id)}),
+                            "ConditionExpression": "attribute_exists(PK)",
+                        }
+                    },
+                    {
+                        "Put": {
+                            "TableName": TABLE_NAME,
+                            "Item": _serialize({**_asset_tag_key(new_tag), "assetId": asset_id}),
+                            "ConditionExpression": "attribute_not_exists(PK)",
+                        }
+                    },
+                    {
+                        "Delete": {
+                            "TableName": TABLE_NAME,
+                            "Key": _serialize(_asset_tag_key(old_tag)),
+                        }
+                    },
+                ]
+            )
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] != "TransactionCanceledException":
+                raise
+            if _tag_conflict(exc):
+                return response(409, {"error": "Conflict", "message": "An asset with this asset tag already exists."})
+            return response(404, {"error": "NotFound", "message": "Asset was not found."})
+    else:
+        TABLE.put_item(Item={**candidate, **_asset_key(asset_id)}, ConditionExpression="attribute_exists(PK)")
+
     LOGGER.info("Asset updated assetId=%s actorSub=%s fields=%s", asset_id, claims.get("sub"), sorted(changed_fields))
     return response(200, {"assetId": asset_id, "message": "Asset updated successfully."})
 

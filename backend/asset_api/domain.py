@@ -14,6 +14,7 @@ TECHNICIAN_UPDATE_FIELDS = {
     "lastMaintenanceDate",
     "imageKey",
 }
+CREATE_RESTRICTED_FIELDS = {"assignedUserId", "department"}
 
 REQUIRED_FIELDS = {
     "assetTag",
@@ -118,4 +119,11 @@ def validate_update_permissions(groups, changed_fields):
     if "Technician" in groups:
         return set(changed_fields).issubset(TECHNICIAN_UPDATE_FIELDS)
     return False
+
+
+def validate_create_permissions(groups, payload):
+    if groups.intersection(FULL_UPDATE_GROUPS):
+        return True
+    restricted_present = {field for field in CREATE_RESTRICTED_FIELDS if payload.get(field)}
+    return not restricted_present
 
