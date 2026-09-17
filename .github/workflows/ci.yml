@@ -17,3 +17,5 @@ jobs:
       - uses: aws-actions/setup-sam@v2
       - name: Validate SAM template
         run: sam validate --template-file infrastructure/template.yaml
+        env:
+          AWS_DEFAULT_REGION: us-east-1
