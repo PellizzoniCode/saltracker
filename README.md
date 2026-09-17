@@ -1,87 +1,77 @@
 # AWS Smart Asset Lifecycle Tracker
 
-A secure, serverless asset-tracking application developed as part of the Digital Cloud Training project course.
+A secure serverless asset-management application built with Amazon Cognito, API Gateway, Lambda, DynamoDB, S3, Amazon Bedrock, EventBridge, SNS, and CloudWatch. SailPoint is planned as the identity-governance and lifecycle-provisioning layer while Cognito remains the application's authentication and JWT provider.
 
-## Project Goal
+## Current milestone
 
-The application will help an organization register, locate, assign and maintain technology assets. It will calculate asset depreciation and use Amazon Bedrock to provide AI-assisted asset identification and maintenance recommendations.
+The starter implements the Week 1 foundation:
 
-## Week 1 Milestone
-
-An authenticated user can:
-
-* Log in and log out
-* Reset their password
-* Access protected application pages
-* Manually create an asset
-* View asset records
-* Search for assets
-
-An unauthenticated user cannot access the application or its protected API.
-
-## Planned AWS Services
-
-* AWS Amplify
-* Amazon Cognito
-* Amazon API Gateway
-* AWS Lambda
-* Amazon DynamoDB
-* Amazon S3
-* Amazon Bedrock
-* Amazon EventBridge
-* Amazon SNS
-* Amazon CloudWatch
-* AWS SAM
-
-## Project Status
-
-Week 1 — Authentication and core asset management.
+- AWS SAM infrastructure
+- Cognito user pool and five application groups
+- API Gateway Cognito authorizer
+- DynamoDB asset table
+- Python Lambda REST API for create, list, view, and update
+- Backend RBAC and record-scope authorization
+- React login and manual asset-entry interface
+- Ten sample assets and unit tests
+- SailPoint-to-Cognito role mapping documentation
 
 ## Architecture
 
-The architecture is developed cumulatively across the four project weeks. Each week builds on the services and functionality completed during the previous week.
+See [`docs/architecture.md`](docs/architecture.md), [`docs/data-model.md`](docs/data-model.md), [`docs/role-permissions.md`](docs/role-permissions.md), and [`docs/sailpoint-integration.md`](docs/sailpoint-integration.md).
 
-### Complete Target Architecture
+## Architecture diagrams
 
-The complete target architecture represents the final serverless application after all four project weeks.
+See [`docs/architecture/README.md`](docs/architecture/README.md) for the complete four-week target architecture and the weekly architecture progression diagrams.
 
-![Complete AWS architecture](docs/architecture/smart-asset-tracker-week-4-architecture.png)
+## Prerequisites
 
-### Weekly Architecture Progression
+- AWS CLI configured for a non-production AWS account
+- AWS SAM CLI
+- Python 3.12
+- Node.js 20 or later
 
-#### Week 1 — Authentication and Core Asset Management
+## Test and deploy the backend
 
-Week 1 establishes the application foundation with an Amplify frontend, Cognito authentication, protected API Gateway endpoints, Lambda application logic and DynamoDB asset storage.
+```bash
+python3 -m unittest discover -s backend/tests -v
+sam validate --template-file infrastructure/template.yaml
+sam build --template-file infrastructure/template.yaml
+sam deploy --guided
+```
 
-![Week 1 architecture](docs/architecture/smart-asset-tracker-week-1-architecture.png)
+Use stack name `smart-asset-tracker-dev` and a development AWS region. After deployment, copy the stack outputs into `frontend/.env` using `frontend/.env.example`.
 
-#### Week 2 — Secure Image Upload and AI Identification
+## Run the frontend
 
-Week 2 extends the Week 1 architecture with private S3 image storage, an AI-processing Lambda function, Amazon Bedrock and human review of AI-generated suggestions.
+```bash
+cd frontend
+cp .env.example .env
+npm install
+npm run dev
+```
 
-![Week 2 architecture](docs/architecture/smart-asset-tracker-week-2-architecture.png)
+## Create test users
 
-#### Week 3 — Depreciation and Maintenance Automation
+Create users in Cognito, confirm them, and assign them to one of these groups:
 
-Week 3 extends the previous architecture with depreciation calculations, maintenance history, scheduled EventBridge checks, a maintenance Lambda function and SNS notifications.
+- `Employee`
+- `Technician`
+- `Manager`
+- `Administrator`
+- `Auditor`
 
-![Week 3 architecture](docs/architecture/smart-asset-tracker-week-3-architecture.png)
+For employee record scoping, set each asset's `assignedUserId` to the user's Cognito `sub`. For manager scoping, add a mutable Cognito custom attribute named `custom:department` and populate it before the user signs in.
 
-#### Week 4 — Security, Monitoring and Final Deployment
+## Security notes
 
-Week 4 completes the target architecture shown at the beginning of this section. A second Week 4 diagram is not displayed because the Week 4 architecture is the complete target architecture.
+- API permissions are enforced in Lambda as well as API Gateway.
+- Employee and Manager access is restricted at record level.
+- Technician updates are restricted to operational fields.
+- Financial values are validated with `Decimal`, never floating point.
+- Secrets and tokens must not be committed.
+- The current scan-based search is appropriate only for the small Week 1 dataset; production access patterns should use indexes.
 
-During Week 4, the team will:
+## Next milestone
 
-* Complete backend role-based authorization
-* Apply least-privilege IAM permissions
-* Secure access to private S3 images
-* Configure CloudWatch logs and alarms
-* Test unauthorized and unsuccessful requests
-* Complete the AWS SAM deployment
-* Review the application for exposed credentials
-* Prepare the project documentation and final demonstration
-
-## Security
-
-AWS credentials, passwords, access tokens and personal information must never be committed to this repository.
+Week 2 adds a private S3 bucket, presigned uploads, Bedrock image analysis with structured output, manual fallback, and mandatory human confirmation before saving AI suggestions.

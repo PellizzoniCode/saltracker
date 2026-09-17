@@ -1,0 +1,218 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: AWS Smart Asset Lifecycle Tracker - Week 1 foundation
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+
+Globals:
+  Function:
+    Runtime: python3.11
+    Architectures: [x86_64]
+    Timeout: 15
+    MemorySize: 256
+    Tracing: Active
+    Environment:
+      Variables:
+        ASSET_TABLE_NAME: !Ref AssetTable
+        LOG_LEVEL: INFO
+
+Resources:
+  AssetTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub smart-asset-tracker-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub smart-asset-tracker-${Environment}
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      MfaConfiguration: OPTIONAL
+      EnabledMfas: [SOFTWARE_TOKEN_MFA]
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          TemporaryPasswordValidityDays: 7
+      Schema:
+        - Name: department
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub smart-asset-tracker-web-${Environment}
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      RefreshTokenValidity: 7
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+
+  EmployeeGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: Employee
+      Description: View assigned assets and report problems
+      UserPoolId: !Ref UserPool
+      Precedence: 50
+
+  TechnicianGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: Technician
+      Description: Create assets and update operational asset data
+      UserPoolId: !Ref UserPool
+      Precedence: 40
+
+  ManagerGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: Manager
+      Description: View department assets and reports
+      UserPoolId: !Ref UserPool
+      Precedence: 30
+
+  AdministratorGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: Administrator
+      Description: Full asset and user administration
+      UserPoolId: !Ref UserPool
+      Precedence: 10
+
+  AuditorGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: Auditor
+      Description: Read-only audit access
+      UserPoolId: !Ref UserPool
+      Precedence: 20
+
+  AssetApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub smart-asset-tracker-${Environment}
+      StageName: !Ref Environment
+      TracingEnabled: true
+      Auth:
+        DefaultAuthorizer: CognitoAuthorizer
+        AddDefaultAuthorizerToCorsPreflight: false
+        Authorizers:
+          CognitoAuthorizer:
+            UserPoolArn: !GetAtt UserPool.Arn
+      Cors:
+        AllowMethods: "'GET,POST,PUT,OPTIONS'"
+        AllowHeaders: "'Content-Type,Authorization'"
+        AllowOrigin: "'*'"
+      GatewayResponses:
+        UNAUTHORIZED:
+          StatusCode: '401'
+          ResponseTemplates:
+            application/json: '{"error":"Unauthorized","message":"Sign in to access this resource."}'
+        ACCESS_DENIED:
+          StatusCode: '403'
+          ResponseTemplates:
+            application/json: '{"error":"Forbidden","message":"You do not have permission to perform this action."}'
+
+  AssetApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub smart-asset-api-${Environment}
+      CodeUri: ../backend/asset_api/
+      Handler: app.lambda_handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AssetTable
+      Events:
+        CreateAsset:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AssetApi
+            Path: /assets
+            Method: POST
+        ListAssets:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AssetApi
+            Path: /assets
+            Method: GET
+        GetAsset:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AssetApi
+            Path: /assets/{assetId}
+            Method: GET
+        UpdateAsset:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AssetApi
+            Path: /assets/{assetId}
+            Method: PUT
+
+  HealthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub smart-asset-health-${Environment}
+      CodeUri: ../backend/health/
+      Handler: app.lambda_handler
+      Policies: []
+      Events:
+        Health:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AssetApi
+            Path: /health
+            Method: GET
+            Auth:
+              Authorizer: NONE
+
+Outputs:
+  ApiUrl:
+    Description: REST API base URL
+    Value: !Sub https://${AssetApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/${Environment}
+  UserPoolId:
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Value: !Ref UserPoolClient
+  AssetTableName:
+    Value: !Ref AssetTable
