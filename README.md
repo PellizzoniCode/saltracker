@@ -1,42 +1,73 @@
 # AWS Smart Asset Lifecycle Tracker
 
-A secure, serverless asset-tracking application developed as part of the Digital Cloud Training project course.
+A secure serverless asset-management application built with Amazon Cognito, API Gateway, Lambda, DynamoDB, S3, Amazon Bedrock, EventBridge, SNS, and CloudWatch. SailPoint is planned as the identity-governance and lifecycle-provisioning layer while Cognito remains the application's authentication and JWT provider.
 
-## Project Goal
+## Current milestone
 
-The application will help an organization register, locate, assign and maintain technology assets. It will calculate asset depreciation and use Amazon Bedrock to provide AI-assisted asset identification and maintenance recommendations.
+The starter implements the Week 1 foundation:
 
-## Week 1 Milestone
+- AWS SAM infrastructure
+- Cognito user pool and five application groups
+- API Gateway Cognito authorizer
+- DynamoDB asset table
+- Python Lambda REST API for create, list, view, and update
+- Backend RBAC and record-scope authorization
+- React login and manual asset-entry interface
+- Ten sample assets and unit tests
+- SailPoint-to-Cognito role mapping documentation
 
-An authenticated user can:
+## Architecture
 
-- Log in and log out
-- Reset their password
-- Access protected application pages
-- Manually create an asset
-- View asset records
-- Search for assets
+See [`docs/architecture.md`](docs/architecture.md), [`docs/data-model.md`](docs/data-model.md), [`docs/role-permissions.md`](docs/role-permissions.md), and [`docs/sailpoint-integration.md`](docs/sailpoint-integration.md).
 
-An unauthenticated user cannot access the application or its protected API.
+## Prerequisites
 
-## Planned AWS Services
+- AWS CLI configured for a non-production AWS account
+- AWS SAM CLI
+- Python 3.12
+- Node.js 20 or later
 
-- AWS Amplify
-- Amazon Cognito
-- Amazon API Gateway
-- AWS Lambda
-- Amazon DynamoDB
-- Amazon S3
-- Amazon Bedrock
-- Amazon EventBridge
-- Amazon SNS
-- Amazon CloudWatch
-- AWS SAM
+## Test and deploy the backend
 
-## Project Status
+```bash
+python3 -m unittest discover -s backend/tests -v
+sam validate --template-file infrastructure/template.yaml
+sam build --template-file infrastructure/template.yaml
+sam deploy --guided
+```
 
-Week 1 — Authentication and core asset management.
+Use stack name `smart-asset-tracker-dev` and a development AWS region. After deployment, copy the stack outputs into `frontend/.env` using `frontend/.env.example`.
 
-## Security
+## Run the frontend
 
-AWS credentials, passwords, access tokens and personal information must never be committed to this repository.
+```bash
+cd frontend
+cp .env.example .env
+npm install
+npm run dev
+```
+
+## Create test users
+
+Create users in Cognito, confirm them, and assign them to one of these groups:
+
+- `Employee`
+- `Technician`
+- `Manager`
+- `Administrator`
+- `Auditor`
+
+For employee record scoping, set each asset's `assignedUserId` to the user's Cognito `sub`. For manager scoping, add a mutable Cognito custom attribute named `custom:department` and populate it before the user signs in.
+
+## Security notes
+
+- API permissions are enforced in Lambda as well as API Gateway.
+- Employee and Manager access is restricted at record level.
+- Technician updates are restricted to operational fields.
+- Financial values are validated with `Decimal`, never floating point.
+- Secrets and tokens must not be committed.
+- The current scan-based search is appropriate only for the small Week 1 dataset; production access patterns should use indexes.
+
+## Next milestone
+
+Week 2 adds a private S3 bucket, presigned uploads, Bedrock image analysis with structured output, manual fallback, and mandatory human confirmation before saving AI suggestions.
