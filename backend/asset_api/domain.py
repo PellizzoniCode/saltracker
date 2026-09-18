@@ -98,13 +98,17 @@ def validate_asset(payload, partial=False):
 def can_read(groups, claims, asset):
     if not groups.intersection(READ_GROUPS):
         return False
-    if groups.intersection({"Administrator", "Auditor", "Technician"}):
+
+    if groups.intersection({"Administrator", "Auditor"}):
         return True
-    if "Manager" in groups:
+
+    if groups.intersection({"Manager", "Technician"}):
         department = claims.get("custom:department")
         return bool(department and department == asset.get("department"))
+
     if "Employee" in groups:
         return claims.get("sub") == asset.get("assignedUserId")
+
     return False
 
 

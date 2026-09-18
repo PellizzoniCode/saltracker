@@ -72,6 +72,21 @@ def _create(event, claims, groups):
 
     payload = _body(event)    
     validate_asset(payload)
+
+    if "Technician" in groups and "Administrator" not in groups:
+        department = claims.get("custom:department")
+
+        if not department:
+            return response(
+                403,
+                {
+                    "error": "Forbidden",
+                    "message": "Your account does not have a department assigned.",
+                },
+            )
+
+        payload["department"] = department
+
     duplicate = TABLE.scan(
         FilterExpression=Attr("assetTag").eq(payload["assetTag"]),
         ProjectionExpression="assetId",
@@ -140,11 +155,28 @@ def _list(event, claims, groups):
 
 
 def _update(event, asset_id, claims, groups):
-    existing = TABLE.get_item(Key=_asset_key(asset_id), ConsistentRead=True).get("Item")
+    existing = TABLE.get_item(
+        Key=_asset_key(asset_id),
+        ConsistentRead=True,
+    ).get("Item")
+
     if not existing:
-        return response(404, {"error": "NotFound", "message": "Asset was not found."})
+        return response(
+            404,
+            {"error": "NotFound", "message": "Asset was not found."},
+        )
+
+    if not can_read(groups, claims, existing):
+        return response(
+            403,
+            {
+                "error": "Forbidden",
+                "message": "You cannot modify assets outside your authorized scope.",
+            },
+        )
 
     payload = _body(event)
+
     immutable = {"assetId", "PK", "SK", "createdAt", "createdBy"}
     changed_fields = set(payload) - immutable
     if not changed_fields:
