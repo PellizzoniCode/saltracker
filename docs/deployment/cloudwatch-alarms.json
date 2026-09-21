@@ -1,0 +1,17 @@
+[
+    {
+        "Name": "smart-asset-api-dev-5xx",
+        "State": "OK",
+        "Metric": "5XXError"
+    },
+    {
+        "Name": "smart-asset-api-dev-errors",
+        "State": "OK",
+        "Metric": "Errors"
+    },
+    {
+        "Name": "smart-asset-api-dev-throttles",
+        "State": "OK",
+        "Metric": "Throttles"
+    }
+]
