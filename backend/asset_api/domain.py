@@ -58,6 +58,15 @@ def validate_asset(payload, partial=False):
     if not isinstance(payload, dict):
         raise ValidationError("Request body must be a JSON object.")
 
+    if "assetTag" in payload and (
+        not isinstance(payload["assetTag"], str)
+        or not payload["assetTag"].strip()
+    ):
+        raise ValidationError(
+            "Asset tag must contain a value.",
+            ["assetTag"],
+        )
+
     if not partial:
         missing = sorted(field for field in REQUIRED_FIELDS if payload.get(field) in (None, ""))
         if missing:
