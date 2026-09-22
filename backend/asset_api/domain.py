@@ -58,6 +58,9 @@ def validate_asset(payload, partial=False):
     if not isinstance(payload, dict):
         raise ValidationError("Request body must be a JSON object.")
 
+    if "assetTag" in payload and (not isinstance(payload["assetTag"], str) or not payload["assetTag"].strip()):
+        raise ValidationError("Asset tag must contain a value.", ["assetTag"])
+
     if not partial:
         missing = sorted(field for field in REQUIRED_FIELDS if payload.get(field) in (None, ""))
         if missing:
@@ -98,13 +101,16 @@ def validate_asset(payload, partial=False):
 def can_read(groups, claims, asset):
     if not groups.intersection(READ_GROUPS):
         return False
-    if groups.intersection({"Administrator", "Auditor", "Technician"}):
+    if groups.intersection({"Administrator", "Auditor"}):
         return True
-    if "Manager" in groups:
+
+    if groups.intersection({"Manager", "Technician"}):
         department = claims.get("custom:department")
         return bool(department and department == asset.get("department"))
+
     if "Employee" in groups:
         return claims.get("sub") == asset.get("assignedUserId")
+
     return False
 
 
@@ -118,4 +124,3 @@ def validate_update_permissions(groups, changed_fields):
     if "Technician" in groups:
         return set(changed_fields).issubset(TECHNICIAN_UPDATE_FIELDS)
     return False
-
