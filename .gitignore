@@ -3,6 +3,9 @@
 .env.*
 !.env.example
 
+# Deployment-specific static frontend configuration
+implementations/indexed-access-pattern/frontend/config.js
+
 # AWS SAM build files
 .aws-sam/
 samconfig.toml

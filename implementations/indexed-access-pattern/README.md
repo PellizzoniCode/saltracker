@@ -51,3 +51,16 @@ The create-asset and get-asset backend functions have also been implemented and 
 ## Integration
 
 This implementation can be compared with the existing scan-based approach. The team can review and selectively integrate the indexes, query operations and authorization logic into the shared application.
+
+## Frontend Configuration
+
+The frontend uses a deployment-specific `config.js` file so that Cognito,
+CloudFront and API Gateway values are not hard-coded in `app.js`.
+
+1. Copy `frontend/config.example.js` to `frontend/config.js`.
+2. Replace the placeholder values with the current AWS deployment values.
+3. Deploy `config.js` with the other frontend files.
+
+`config.js` is ignored by Git. Browser configuration is visible to users, so
+passwords, AWS access keys, Cognito client secrets and tokens must never be
+placed in it.

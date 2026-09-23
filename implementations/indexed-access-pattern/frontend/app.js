@@ -1,9 +1,15 @@
-const CONFIG = {
-  cognitoDomain: "https://us-east-1lvdsie5wo.auth.us-east-1.amazoncognito.com",
-  clientId: "55rsa17t45ciere3ndr9iamsuo",
-  redirectUri: "https://d10114m5tqjy2i.cloudfront.net/",
-  apiBaseUrl: "https://iizp6kb7e4.execute-api.us-east-1.amazonaws.com/dev"
-};
+const CONFIG = window.APP_CONFIG || {};
+
+const requiredConfigFields = [
+  "cognitoDomain",
+  "clientId",
+  "redirectUri",
+  "apiBaseUrl"
+];
+
+const missingConfigFields = requiredConfigFields.filter(
+  field => !CONFIG[field] || CONFIG[field].startsWith("YOUR_")
+);
 
 const loginButton = document.getElementById("loginButton");
 const panelLoginButton = document.getElementById("panelLoginButton");
@@ -246,6 +252,13 @@ function logout() {
 }
 
 async function start() {
+  if (missingConfigFields.length > 0) {
+    showMessage(
+      `Application configuration is missing: ${missingConfigFields.join(", ")}.`
+    );
+    return;
+  }
+
   loginButton.addEventListener("click", login);
   panelLoginButton.addEventListener("click", login);
   logoutButton.addEventListener("click", logout);
