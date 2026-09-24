@@ -6,9 +6,9 @@
 #   scripts/dev.sh sync               watch backend code and hot-sync Lambda changes (sam sync)
 #   scripts/dev.sh env                write frontend/.env from the stack outputs
 #   scripts/dev.sh seed               load sample-data/assets.json through the deployed Lambda
-#   scripts/dev.sh user EMAIL GROUP PASSWORD [DEPARTMENT]
+#   scripts/dev.sh user -e EMAIL -p PASSWORD -g GROUP [-d DEPARTMENT]
 #                                     create a confirmed Cognito user in GROUP
-#                                     (PASSWORD '-' prompts for it instead)
+#                                     (omit -p to be prompted for the password)
 #   scripts/dev.sh web                start the Vite dev server
 #   scripts/dev.sh down [--purge]     delete the stack (--purge also deletes the retained table)
 #
@@ -139,9 +139,20 @@ PY
 
 cmd_user() {
   check_aws
-  local email="${1:-}" group="${2:-}" password="${3:-}" department="${4:-}"
-  [[ -n "$email" && -n "$group" && -n "$password" ]] \
-    || die "Usage: dev.sh user EMAIL GROUP PASSWORD [DEPARTMENT]  (PASSWORD '-' prompts for it)"
+  local usage="Usage: dev.sh user -e EMAIL -p PASSWORD -g GROUP [-d DEPARTMENT]"
+  local email="" password="" group="" department=""
+  while [[ $# -gt 0 ]]; do
+    [[ $# -ge 2 ]] || die "Missing value for $1. $usage"
+    case "$1" in
+      -e|--email)      email="$2" ;;
+      -p|--password)   password="$2" ;;
+      -g|--group)      group="$2" ;;
+      -d|--department) department="$2" ;;
+      *) die "Unknown option '$1'. $usage" ;;
+    esac
+    shift 2
+  done
+  [[ -n "$email" && -n "$group" ]] || die "$usage"
   [[ " $GROUPS_ALLOWED " == *" $group "* ]] || die "GROUP must be one of: $GROUPS_ALLOWED"
 
   local pool
@@ -149,7 +160,7 @@ cmd_user() {
   [[ -n "$pool" && "$pool" != "None" ]] \
     || die "Stack $STACK_NAME not found in $AWS_REGION — run 'scripts/dev.sh deploy' first."
 
-  if [[ "$password" == "-" ]]; then password="$(prompt_password)"; fi
+  if [[ -z "$password" ]]; then password="$(prompt_password)"; fi
   check_password "$password"
 
   local attrs=(Name=email,Value="$email" Name=email_verified,Value=true)
@@ -177,7 +188,7 @@ cmd_user() {
 # Prompts twice without echoing, for when the password should stay out of shell history.
 prompt_password() {
   local password confirm
-  [[ -t 0 ]] || die "No terminal to prompt on — pass the password as an argument."
+  [[ -t 0 ]] || die "No terminal to prompt on — pass the password with -p."
   read -rsp "Password: " password; echo >&2
   read -rsp "Confirm password: " confirm; echo >&2
   [[ "$password" == "$confirm" ]] || die "Passwords do not match."
@@ -221,7 +232,7 @@ cmd_up() {
   cmd_test
   cmd_deploy
   cmd_seed
-  log "Done. Create a login with: scripts/dev.sh user you@example.com Administrator 'Your-Pass123!' IT"
+  log "Done. Create a login with: scripts/dev.sh user -e you@example.com -p 'Your-Pass123!' -g Administrator -d IT"
   log "Then start the UI with:     scripts/dev.sh web"
 }
 
