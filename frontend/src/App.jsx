@@ -49,6 +49,7 @@ function AssetApplication({ signOut, user }) {
   const [analysisMessage, setAnalysisMessage] = useState("");
   const [checkingAnalysis, setCheckingAnalysis] = useState(false);
   const analysisTimer = useRef(null);
+  const [viewingPhotoId, setViewingPhotoId] = useState(null);
 
   const loadAssets = useCallback(async () => {
     try {
@@ -222,6 +223,22 @@ function applyAnalysis() {
   );
 }
 
+async function viewAssetPhoto(assetId) {
+  if (viewingPhotoId) return;
+
+  setViewingPhotoId(assetId);
+  setMessage("");
+
+  try {
+    const result = await api(`/assets/${assetId}/photo`);
+    window.open(result.url, "_blank", "noopener,noreferrer");
+  } catch (error) {
+    setMessage(error.message);
+  } finally {
+    setViewingPhotoId(null);
+  }
+}
+
 function rejectAnalysis() {
   setAnalysis(null);
   setAnalysisMessage(
@@ -369,10 +386,30 @@ if (analysisTimer.current) {
         </div>
         <div className="table-wrap">
           <table>
-            <thead><tr><th>Tag</th><th>Category</th><th>Description</th><th>Department</th><th>Status</th></tr></thead>
+            <thead><tr><th>Tag</th><th>Category</th><th>Description</th><th>Department</th><th>Status</th><th>Photo</th></tr></thead>
             <tbody>
               {assets.map((asset) => (
-                <tr key={asset.assetId}><td>{asset.assetTag}</td><td>{asset.category}</td><td>{asset.description}</td><td>{asset.department || "—"}</td><td><span className="status">{asset.status}</span></td></tr>
+                <tr key={asset.assetId}>
+                  <td>{asset.assetTag}</td>
+                  <td>{asset.category}</td>
+                  <td>{asset.description}</td>
+                  <td>{asset.department || "—"}</td>
+                  <td><span className="status">{asset.status}</span></td>
+                  <td>
+                    {asset.imageKey ? (
+                      <button
+                        type="button"
+                        className="secondary"
+                        disabled={viewingPhotoId === asset.assetId}
+                        onClick={() => viewAssetPhoto(asset.assetId)}
+                      >
+                        {viewingPhotoId === asset.assetId ? "Loading..." : "View"}
+                      </button>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                </tr>
               ))}
             </tbody>
           </table>

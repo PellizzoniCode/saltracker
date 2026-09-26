@@ -336,6 +336,36 @@ Resources:
             Path: /photo-analysis
             Method: GET
 
+  PhotoViewFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub smart-asset-photo-view-${Environment}
+      CodeUri: ../backend/asset_api/
+      Handler: photo_view.lambda_handler
+      Environment:
+        Variables:
+          ASSET_PHOTO_BUCKET: !Sub ${AWS::StackName}-photos-${AWS::AccountId}-${AWS::Region}
+      Policies:
+        - Statement:
+            - Sid: ReadAssetForPhotoPermissionCheck
+              Effect: Allow
+              Action:
+                - dynamodb:GetItem
+              Resource: !GetAtt AssetTable.Arn
+
+            - Sid: ReadPendingPhotoForView
+              Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource: !Sub ${AssetPhotoBucket.Arn}/pending/*
+      Events:
+        GetAssetPhoto:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AssetApi
+            Path: /assets/{assetId}/photo
+            Method: GET
+
   HealthFunction:
     Type: AWS::Serverless::Function
     Properties:
