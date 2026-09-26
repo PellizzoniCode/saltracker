@@ -31,7 +31,40 @@ See [`docs/architecture/README.md`](docs/architecture/README.md) for the complet
 - Python 3.11 (matches the Lambda `Runtime` in `infrastructure/template.yaml`; required for a native `sam build` — use `sam build --use-container` instead if you don't have 3.11 installed locally)
 - Node.js 20 or later
 
-## Test and deploy the backend
+## Quick start with `scripts/dev.sh`
+
+`scripts/dev.sh` wraps the manual steps below into single commands for a non-production test stack. It requires the AWS CLI configured for your account, the SAM CLI, `python3`, and `npm`.
+
+```bash
+scripts/dev.sh up                                                                 # test, build, deploy, write frontend/.env, seed sample data
+scripts/dev.sh user -e you@example.com -p 'Your-Pass123!' -g Administrator -d IT # create a confirmed login
+scripts/dev.sh web                                                                # start the frontend
+```
+
+| Command                                              | What it does                                                                                                                                                                                                                                                                       |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `up`                                                 | Runs unit tests, validates and builds (cached), deploys without prompts, writes `frontend/.env`, and seeds `sample-data/assets.json`                                                                                                                                               |
+| `deploy`                                             | Build and deploy only, then refresh `frontend/.env`                                                                                                                                                                                                                                |
+| `sync`                                               | Watches backend code and hot-syncs Lambda changes with `sam sync --watch` (dev stacks only)                                                                                                                                                                                        |
+| `env`                                                | Writes `frontend/.env` from the stack outputs                                                                                                                                                                                                                                      |
+| `seed`                                               | Loads the sample assets through the deployed Lambda, so validation and tag uniqueness still apply. Safe to re-run; existing tags are skipped                                                                                                                                       |
+| `user -e EMAIL -p PASSWORD -g GROUP [-d DEPARTMENT]` | Creates a confirmed Cognito user in `GROUP`, optionally setting `custom:department`. The password must meet the pool policy (12+ characters with upper, lower, number, and symbol); omit `-p` to be prompted for it. Long forms: `--email`, `--password`, `--group`, `--department` |
+| `web`                                                | Installs frontend dependencies if needed and runs the Vite dev server                                                                                                                                                                                                              |
+| `down [--purge]`                                     | Deletes the stack; `--purge` also deletes the retained DynamoDB table                                                                                                                                                                                                              |
+| `test` / `build`                                     | Runs only the unit tests / only validate and build                                                                                                                                                                                                                                 |
+
+Defaults can be overridden with environment variables: `ENVIRONMENT` (default `dev`), `STACK_NAME` (default `smart-asset-tracker-$ENVIRONMENT`), and `AWS_REGION` (default `us-east-1`).
+
+Wrap the password in single quotes so characters like `!` and `$` aren't interpreted by the shell. A password passed with `-p` is saved in your shell history; leave out `-p` to type it at a hidden prompt instead.
+
+To test without touching the shared `dev` stack, use a different environment. Resource names are derived from `ENVIRONMENT`, so this creates a fully separate stack, table, functions, and user pool. Changing only `STACK_NAME` is not enough, because the table and function names would collide.
+
+```bash
+ENVIRONMENT=test scripts/dev.sh up
+ENVIRONMENT=test scripts/dev.sh down --purge
+```
+
+## Test and deploy the backend manually
 
 ```bash
 python3 -m unittest discover -s backend/tests -v
@@ -70,6 +103,8 @@ Create users in Cognito, confirm them, and assign them to one of these groups:
 - `Manager`
 - `Administrator`
 - `Auditor`
+
+`scripts/dev.sh user -e EMAIL -p PASSWORD -g GROUP [-d DEPARTMENT]` does this in one step.
 
 For employee record scoping, set each asset's `assignedUserId` to the user's Cognito `sub`. For manager scoping, add a mutable Cognito custom attribute named `custom:department` and populate it before the user signs in.
 
