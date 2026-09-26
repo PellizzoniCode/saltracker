@@ -7,6 +7,15 @@ Parameters:
     Type: String
     Default: dev
     AllowedValues: [dev, test, prod]
+  AlertEmail:
+    Type: String
+    Default: ''
+    Description: >-
+      Email address to receive CloudWatch alarm notifications. Leave blank
+      to skip creating the SNS subscription.
+
+Conditions:
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, '']]
 
 Globals:
   Function:
@@ -69,6 +78,12 @@ Resources:
               - http://localhost:5180
             AllowedHeaders: ['*']
             MaxAge: 300
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireUnclaimedPendingUploads
+            Status: Enabled
+            Prefix: pending/
+            ExpirationInDays: 7
 
   UserPool:
     Type: AWS::Cognito::UserPool
@@ -353,6 +368,174 @@ Resources:
             Auth:
               Authorizer: NONE
 
+  # --- Monitoring -----------------------------------------------------
+  # Explicit log groups (matching each function's auto-generated name) let
+  # us set retention and alarms as part of the stack instead of a manual
+  # post-deploy script. If a log group with the same name already exists
+  # outside this stack (e.g. from an earlier deploy before this template
+  # change), delete it first: aws logs delete-log-group --log-group-name ...
+
+  AlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub smart-asset-tracker-alerts-${Environment}
+
+  AlertsSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlertEmail
+    Properties:
+      TopicArn: !Ref AlertsTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  AssetApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/smart-asset-api-${Environment}
+      RetentionInDays: 30
+
+  HealthLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/smart-asset-health-${Environment}
+      RetentionInDays: 14
+
+  PhotoUploadLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/smart-asset-photo-upload-${Environment}
+      RetentionInDays: 14
+
+  PhotoAnalysisLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/smart-asset-photo-analysis-${Environment}
+      RetentionInDays: 30
+
+  PhotoAnalysisApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/smart-asset-photo-analysis-api-${Environment}
+      RetentionInDays: 14
+
+  AssetApiErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub smart-asset-api-${Environment}-errors
+      AlarmDescription: Asset API Lambda returned errors
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref AssetApiFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertsTopic]
+      OKActions: [!Ref AlertsTopic]
+
+  AssetApiThrottlesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub smart-asset-api-${Environment}-throttles
+      AlarmDescription: Asset API Lambda was throttled
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref AssetApiFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertsTopic]
+      OKActions: [!Ref AlertsTopic]
+
+  PhotoUploadErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub smart-asset-photo-upload-${Environment}-errors
+      AlarmDescription: Photo upload Lambda returned errors
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref PhotoUploadFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertsTopic]
+      OKActions: [!Ref AlertsTopic]
+
+  PhotoAnalysisErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub smart-asset-photo-analysis-${Environment}-errors
+      AlarmDescription: >-
+        Bedrock photo-analysis Lambda returned errors (this function runs
+        asynchronously off an S3 event, so failures are otherwise silent)
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref PhotoAnalysisFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertsTopic]
+      OKActions: [!Ref AlertsTopic]
+
+  PhotoAnalysisThrottlesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub smart-asset-photo-analysis-${Environment}-throttles
+      AlarmDescription: Bedrock photo-analysis Lambda was throttled
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref PhotoAnalysisFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertsTopic]
+      OKActions: [!Ref AlertsTopic]
+
+  ApiGateway5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub smart-asset-api-${Environment}-5xx
+      AlarmDescription: API Gateway returned server errors
+      Namespace: AWS/ApiGateway
+      MetricName: 5XXError
+      Dimensions:
+        - Name: ApiName
+          Value: !Sub smart-asset-tracker-${Environment}
+        - Name: Stage
+          Value: !Ref Environment
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertsTopic]
+      OKActions: [!Ref AlertsTopic]
+
 Outputs:
   ApiUrl:
     Description: REST API base URL
@@ -366,3 +549,6 @@ Outputs:
   AssetPhotoBucketName:
     Description: Private asset photograph bucket
     Value: !Ref AssetPhotoBucket
+  AlertsTopicArn:
+    Description: SNS topic for CloudWatch alarm notifications
+    Value: !Ref AlertsTopic
