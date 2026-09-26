@@ -115,6 +115,7 @@ def _create(event, claims, groups):
 
     payload = _body(event)
     validate_asset(payload)
+
     if not validate_create_permissions(groups, payload):
         return response(
             403,
