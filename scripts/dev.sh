@@ -27,6 +27,26 @@ cd "$ROOT"
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31mxx\033[0m %s\n' "$*" >&2; exit 1; }
 
+reject_production_target() {
+  local value normalized
+  for value in "$ENVIRONMENT" "$STACK_NAME"; do
+    normalized="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+    case "$normalized" in
+      prod|production|prod-*|production-*|*-prod|*-production|*-prod-*|*-production-*)
+        die "Production target rejected: ENVIRONMENT=$ENVIRONMENT STACK_NAME=$STACK_NAME"
+        ;;
+    esac
+  done
+}
+
+confirm_exact() {
+  local prompt="$1" expected="$2" answer
+  [[ -t 0 ]] || die "Confirmation requires an interactive terminal."
+  printf '%s\n> ' "$prompt" >&2
+  IFS= read -r answer
+  [[ "$answer" == "$expected" ]] || die "Confirmation did not match. Nothing was deleted."
+}
+
 require() {
   for cmd in "$@"; do
     command -v "$cmd" >/dev/null || die "'$cmd' is required but not installed."
@@ -43,6 +63,8 @@ output() {
   aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
     --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text
 }
+
+reject_production_target
 
 cmd_test() {
   log "Running unit tests"
@@ -216,11 +238,28 @@ cmd_web() {
 
 cmd_down() {
   check_aws
-  local table
+  local account table purge=false
+  case "${1:-}" in
+    "") ;;
+    --purge) purge=true ;;
+    *) die "Usage: dev.sh down [--purge]" ;;
+  esac
+
+  account="$(aws sts get-caller-identity --query Account --output text)"
   table="$(output AssetTableName 2>/dev/null || true)"
+
+  printf '\nDeletion target\n  AWS account: %s\n  Region:      %s\n  Stack:       %s\n' \
+    "$account" "$AWS_REGION" "$STACK_NAME"
+  confirm_exact "Type the stack name '$STACK_NAME' to confirm stack deletion:" "$STACK_NAME"
+
+  if [[ "$purge" == true && -n "$table" && "$table" != "None" ]]; then
+    printf '\nPurge target\n  DynamoDB table: %s\n' "$table"
+    confirm_exact "Type the table name '$table' to confirm permanent table deletion:" "$table"
+  fi
+
   log "Deleting stack $STACK_NAME"
   sam delete --stack-name "$STACK_NAME" --region "$AWS_REGION" --no-prompts
-  if [[ "${1:-}" == "--purge" && -n "$table" && "$table" != "None" ]]; then
+  if [[ "$purge" == true && -n "$table" && "$table" != "None" ]]; then
     log "Deleting retained table $table"
     aws dynamodb delete-table --table-name "$table" >/dev/null
   else
