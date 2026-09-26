@@ -1,28 +1,36 @@
 # CloudWatch monitoring
 
-The monitoring script configures the deployed Smart Asset Lifecycle Tracker with:
+Monitoring is defined in `infrastructure/template.yaml` and deploys with the rest of the stack — there is no separate manual step. It provisions:
 
-- 30-day retention for the asset API Lambda logs
-- 14-day retention for the health Lambda logs
-- Lambda error and throttle alarms
-- API Gateway 5XX alarms
-- SNS email notifications for alarm and recovery transitions
+- 30-day retention for the asset API and photo-analysis Lambda logs; 14-day retention for health, photo-upload, and photo-analysis-API logs
+- Lambda error and throttle alarms for the asset API and photo-analysis functions
+- A photo-upload error alarm
+- An API Gateway 5XX alarm
+- An SNS topic, with an optional email subscription
 
 ## Configure
 
-Sign in to the intended AWS account with the AWS CLI, then run from the repository root:
+Pass an email address as a stack parameter to receive alarm notifications:
 
 ```bash
-bash scripts/configure-cloudwatch.sh your-email@example.com
+sam deploy --parameter-overrides Environment=dev AlertEmail=your-email@example.com
 ```
 
-Confirm the subscription using the link in the email from AWS. Re-running the script safely updates the same topic, retention policies, and alarms.
+Leaving `AlertEmail` blank (the default) skips creating the subscription — the topic and alarms are still created, so you can subscribe another endpoint (e.g. a queue) later.
 
-The defaults target `us-east-1` and the `dev` environment. Override them when needed:
+Confirm the subscription using the link in the email AWS sends. Re-deploying with the same `AlertEmail` is a no-op for the subscription; changing it replaces the subscription.
+
+### Migrating an existing deployment
+
+If you deployed this stack before this change (or ran the old `scripts/configure-cloudwatch.sh`), the Lambda log groups already exist outside CloudFormation. Deploying the new template will fail with "log group already exists" unless you first remove them so CloudFormation can (re)create and manage them:
 
 ```bash
-AWS_REGION=us-east-1 ENVIRONMENT=dev bash scripts/configure-cloudwatch.sh your-email@example.com
+for fn in api health photo-upload photo-analysis photo-analysis-api; do
+  aws logs delete-log-group --log-group-name "/aws/lambda/smart-asset-${fn}-dev" --region us-east-1 || true
+done
 ```
+
+Any CloudWatch alarms or SNS topic/subscription created by the old script are unrelated to the ones this template manages and can be deleted separately once you've confirmed the new ones are in place.
 
 ## Inspect
 

@@ -43,6 +43,8 @@ Return only a valid JSON object with these fields:
   "category": "string",
   "description": "string",
   "condition": "Good, Fair, Poor, or Unknown",
+  "manufacturer": "string",
+  "model": "string",
   "usefulLifeMonths": 48,
   "maintenanceCategory": "string",
   "reviewStatus": "NeedsReview or NeedsManualEntry"
@@ -53,6 +55,11 @@ Rules:
 - Do not invent information that cannot be verified from the photograph.
 - Do not provide serial numbers, exact model numbers, purchase values,
   purchase dates, or employee assignments.
+- Only fill in "manufacturer" when a logo or label makes it clearly
+  visible; otherwise return an empty string.
+- Only fill in "model" with a general model family (never an exact model
+  number) when it can be confidently read from the photograph; otherwise
+  return an empty string.
 - Keep the description short.
 - If the asset cannot be identified, use NeedsManualEntry.
 - If the asset can be identified, use NeedsReview.
@@ -94,6 +101,8 @@ def validate_suggestion(raw_text):
         "category",
         "description",
         "condition",
+        "manufacturer",
+        "model",
         "maintenanceCategory",
     ):
         value = result.get(field, "")
