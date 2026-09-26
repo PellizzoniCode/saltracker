@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Smart Asset Lifecycle Tracker</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Smart Asset Lifecycle Tracker</h1>
+      <p>AWS asset management portal</p>
+    </div>
+    <div class="actions">
+      <span id="userEmail"></span>
+      <button id="loginButton">Sign in</button>
+      <button id="logoutButton" class="secondary hidden">Sign out</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="signedOutPanel" class="card">
+      <h2>Sign in required</h2>
+      <p>Sign in with your Cognito account to view the assets assigned to you.</p>
+      <button id="panelLoginButton">Sign in with Cognito</button>
+    </section>
+
+    <section id="signedInPanel" class="hidden">
+      <div class="toolbar">
+        <div>
+          <h2>My Assets</h2>
+          <p id="assetSummary">Loading assets...</p>
+        </div>
+        <button id="refreshButton" class="secondary">Refresh</button>
+      </div>
+
+      <div id="message" class="message hidden"></div>
+      <div id="assetGrid" class="asset-grid"></div>
+    </section>
+  </main>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
