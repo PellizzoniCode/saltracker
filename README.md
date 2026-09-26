@@ -37,7 +37,7 @@ See [`docs/architecture/README.md`](docs/architecture/README.md) for the complet
 
 ```bash
 scripts/dev.sh up                                                                 # test, build, deploy, write frontend/.env, seed sample data
-scripts/dev.sh user -e you@example.com -p 'Your-Pass123!' -g Administrator -d IT # create a confirmed login
+scripts/dev.sh user -e you@example.com -g Administrator -d IT                   # create a confirmed login; password is prompted securely
 scripts/dev.sh web                                                                # start the frontend
 ```
 
