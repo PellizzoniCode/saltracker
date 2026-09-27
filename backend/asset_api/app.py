@@ -200,11 +200,15 @@ def _get(asset_id, claims, groups):
 
 def _list(event, claims, groups):
     params = event.get("queryStringParameters") or {}
+
     filters = Attr("SK").eq("METADATA")
+
     if params.get("status"):
         filters &= Attr("status").eq(params["status"])
+
     if params.get("category"):
         filters &= Attr("category").eq(params["category"])
+
     if params.get("q"):
         query = params["q"]
         filters &= (
@@ -213,9 +217,44 @@ def _list(event, claims, groups):
             | Attr("manufacturer").contains(query)
         )
 
-    result = TABLE.scan(FilterExpression=filters, Limit=100)
-    permitted = [_clean_asset(item) for item in result.get("Items", []) if can_read(groups, claims, item)]
-    return response(200, {"items": permitted, "count": len(permitted)})
+    request = {
+        "FilterExpression": filters,
+        "Limit": 100,
+    }
+
+    if "Employee" in groups:
+        request["IndexName"] = "AssignedUserIndex"
+        request["KeyConditionExpression"] = Key("assignedUserId").eq(claims["sub"])
+        result = TABLE.query(**request)
+
+    elif groups.intersection({"Manager", "Technician"}):
+        department = claims.get("custom:department")
+
+        if not department:
+            return response(403, {
+                "error": "Forbidden",
+                "message": "Your account does not have a department assigned.",
+            })
+
+        request["IndexName"] = "DepartmentIndex"
+        request["KeyConditionExpression"] = Key("department").eq(department)
+        result = TABLE.query(**request)
+
+    elif groups.intersection({"Administrator", "Auditor"}):
+        result = TABLE.scan(**request)
+
+    else:
+        return response(403, {
+            "error": "Forbidden",
+            "message": "You do not have permission to list assets.",
+        })
+
+    items = [_clean_asset(item) for item in result.get("Items", [])]
+
+    return response(200, {
+        "items": items,
+        "count": len(items),
+    })
 
 
 def _update(event, asset_id, claims, groups):
