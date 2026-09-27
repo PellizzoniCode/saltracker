@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 import boto3
-from boto3.dynamodb.conditions import Attr
+from boto3.dynamodb.conditions import Attr, Key
 from boto3.dynamodb.types import TypeSerializer
 from botocore.exceptions import ClientError
 
