@@ -36,9 +36,10 @@ def _load_api():
     table = MagicMock(name="table")
     table.name = "test-assets"
     transactions = MagicMock(name="transactions")
+    s3 = MagicMock(name="s3")
     boto3 = types.ModuleType("boto3")
     boto3.resource = MagicMock(return_value=types.SimpleNamespace(Table=lambda name: table))
-    boto3.client = MagicMock(return_value=transactions)
+    boto3.client = MagicMock(side_effect=lambda service, *a, **k: {"dynamodb": transactions, "s3": s3}[service])
     dynamodb = types.ModuleType("boto3.dynamodb")
     conditions = types.ModuleType("boto3.dynamodb.conditions")
     conditions.Attr = _Attr
@@ -57,9 +58,10 @@ def _load_api():
     }
     spec = importlib.util.spec_from_file_location("asset_api_under_test", API_DIR / "app.py")
     module = importlib.util.module_from_spec(spec)
-    with patch.dict(sys.modules, modules), patch.dict(os.environ, {"ASSET_TABLE_NAME": "test-assets"}):
+    env = {"ASSET_TABLE_NAME": "test-assets", "ASSET_PHOTO_BUCKET": "private-photos"}
+    with patch.dict(sys.modules, modules), patch.dict(os.environ, env):
         spec.loader.exec_module(module)
-    return module, table, transactions
+    return module, table, transactions, s3
 
 
 ASSET = {
@@ -72,7 +74,7 @@ ASSET = {
 
 class UniqueTagTests(unittest.TestCase):
     def setUp(self):
-        self.api, self.table, self.transactions = _load_api()
+        self.api, self.table, self.transactions, self.s3 = _load_api()
         self.event = {"body": json.dumps(ASSET)}
 
     def test_duplicate_on_later_scan_page_is_rejected(self):
@@ -127,6 +129,81 @@ class UniqueTagTests(unittest.TestCase):
         })
         result = self.api._create(self.event, {"sub": "admin"}, {"Administrator"})
         self.assertEqual(result["statusCode"], 409)
+
+
+class ClaimPendingPhotoTests(unittest.TestCase):
+    def setUp(self):
+        self.api, self.table, self.transactions, self.s3 = _load_api()
+
+    def test_claim_photo_moves_pending_object_to_claimed_prefix(self):
+        claimed = self.api._claim_photo("pending/user-1/abc123.jpg")
+
+        self.assertEqual(claimed, "claimed/user-1/abc123.jpg")
+        self.s3.copy_object.assert_called_once_with(
+            Bucket="private-photos",
+            CopySource={"Bucket": "private-photos", "Key": "pending/user-1/abc123.jpg"},
+            Key="claimed/user-1/abc123.jpg",
+        )
+        self.s3.delete_object.assert_called_once_with(
+            Bucket="private-photos", Key="pending/user-1/abc123.jpg"
+        )
+
+    def test_claim_photo_on_already_claimed_key_is_a_no_op(self):
+        claimed = self.api._claim_photo("claimed/user-1/abc123.jpg")
+
+        self.assertEqual(claimed, "claimed/user-1/abc123.jpg")
+        self.s3.copy_object.assert_not_called()
+        self.s3.delete_object.assert_not_called()
+
+    def test_claim_photo_raises_when_pending_object_is_missing(self):
+        self.s3.copy_object.side_effect = _ClientError({"Error": {"Code": "NoSuchKey"}})
+
+        with self.assertRaises(self.api.ValidationError):
+            self.api._claim_photo("pending/user-1/missing.jpg")
+
+    def test_create_claims_pending_photo_before_saving_asset(self):
+        self.table.scan.return_value = {"Items": []}
+        event = {"body": json.dumps({**ASSET, "imageKey": "pending/user-1/abc123.jpg"})}
+
+        result = self.api._create(event, {"sub": "admin"}, {"Administrator"})
+
+        self.assertEqual(result["statusCode"], 201)
+        self.s3.copy_object.assert_called_once()
+        writes = self.transactions.transact_write_items.call_args.kwargs["TransactItems"]
+        self.assertEqual(writes[1]["Put"]["Item"]["imageKey"], {"S": "claimed/user-1/abc123.jpg"})
+
+    def test_update_claims_pending_photo_only_when_imagekey_changes(self):
+        existing = {
+            **ASSET, "assetId": "AST-OWN", "PK": "ASSET#AST-OWN", "SK": "METADATA",
+            "imageKey": "claimed/user-1/old.jpg",
+        }
+        self.table.get_item.return_value = {"Item": existing}
+        event = {"body": json.dumps({"imageKey": "pending/user-1/new.jpg"})}
+
+        result = self.api._update(event, "AST-OWN", {"sub": "admin"}, {"Administrator"})
+
+        self.assertEqual(result["statusCode"], 200)
+        self.s3.copy_object.assert_called_once_with(
+            Bucket="private-photos",
+            CopySource={"Bucket": "private-photos", "Key": "pending/user-1/new.jpg"},
+            Key="claimed/user-1/new.jpg",
+        )
+        saved_item = self.table.put_item.call_args.kwargs["Item"]
+        self.assertEqual(saved_item["imageKey"], "claimed/user-1/new.jpg")
+
+    def test_update_without_imagekey_change_does_not_touch_s3(self):
+        existing = {
+            **ASSET, "assetId": "AST-OWN", "PK": "ASSET#AST-OWN", "SK": "METADATA",
+            "imageKey": "claimed/user-1/old.jpg",
+        }
+        self.table.get_item.return_value = {"Item": existing}
+        event = {"body": json.dumps({"description": "Updated description"})}
+
+        result = self.api._update(event, "AST-OWN", {"sub": "admin"}, {"Administrator"})
+
+        self.assertEqual(result["statusCode"], 200)
+        self.s3.copy_object.assert_not_called()
+        self.s3.delete_object.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -22,11 +22,14 @@ Confirm the subscription using the link in the email AWS sends. Re-deploying wit
 
 ### Migrating an existing deployment
 
-If you deployed this stack before this change (or ran the old `scripts/configure-cloudwatch.sh`), the Lambda log groups already exist outside CloudFormation. Deploying the new template will fail with "log group already exists" unless you first remove them so CloudFormation can (re)create and manage them:
+If you deployed this stack before this change (or ran the old `scripts/configure-cloudwatch.sh`), the Lambda log groups already exist outside CloudFormation — Lambda auto-creates them on first invocation, using the same name this template's `AWS::Logs::LogGroup` resources now claim. Deploying the new template will fail with "log group already exists" unless you first remove them so CloudFormation can (re)create and manage them.
+
+This must be run once per environment, against every environment that has an existing deployment (any stack that's had at least one invocation, e.g. `dev` and `test`) — **before** its first deploy of this template:
 
 ```bash
+ENVIRONMENT=test   # match the stack you're migrating, e.g. dev or test
 for fn in api health photo-upload photo-analysis photo-analysis-api; do
-  aws logs delete-log-group --log-group-name "/aws/lambda/smart-asset-${fn}-dev" --region us-east-1 || true
+  aws logs delete-log-group --log-group-name "/aws/lambda/smart-asset-${fn}-${ENVIRONMENT}" --region us-east-1 || true
 done
 ```
 

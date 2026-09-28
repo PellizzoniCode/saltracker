@@ -50,6 +50,7 @@ function AssetApplication({ signOut, user }) {
   const [checkingAnalysis, setCheckingAnalysis] = useState(false);
   const analysisTimer = useRef(null);
   const activePhotoKey = useRef(null);
+  const uploadToken = useRef(0);
 
   const loadAssets = useCallback(async () => {
     try {
@@ -86,6 +87,7 @@ function AssetApplication({ signOut, user }) {
   }
 
   activePhotoKey.current = null;
+  uploadToken.current += 1;
   setPhoto(selected);
   setForm((current) => ({ ...current, imageKey: "" }));
   setPhotoMessage("");
@@ -150,6 +152,8 @@ function AssetApplication({ signOut, user }) {
     async function uploadPhoto() {
   if (!photo || uploading || saving) return;
 
+  const token = uploadToken.current;
+
   if (
     !["image/jpeg", "image/png"].includes(photo.type) ||
     photo.size < 1 ||
@@ -174,6 +178,8 @@ function AssetApplication({ signOut, user }) {
       }),
     });
 
+    if (uploadToken.current !== token) return;
+
     const data = new FormData();
 
     Object.entries(signed.fields).forEach(
@@ -192,6 +198,8 @@ function AssetApplication({ signOut, user }) {
         "Photo upload failed. Please try again."
       );
     }
+
+    if (uploadToken.current !== token) return;
 
     setForm((current) => ({
       ...current,

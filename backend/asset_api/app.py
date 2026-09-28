@@ -26,7 +26,12 @@ LOGGER = logging.getLogger()
 LOGGER.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 TABLE = boto3.resource("dynamodb").Table(os.environ["ASSET_TABLE_NAME"])
 TRANSACTIONS = boto3.client("dynamodb")
+S3 = boto3.client("s3")
+PHOTO_BUCKET = os.environ.get("ASSET_PHOTO_BUCKET")
 SERIALIZER = TypeSerializer()
+
+PENDING_PREFIX = "pending/"
+CLAIMED_PREFIX = "claimed/"
 
 
 def response(status_code, body):
@@ -109,6 +114,31 @@ def _clean_asset(item):
     return {key: value for key, value in item.items() if key not in {"PK", "SK"}}
 
 
+def _claim_photo(image_key):
+    """Move a pending photo out of the prefix the S3 lifecycle rule expires.
+
+    Once an asset's imageKey points at it, the photo must outlive the 7-day
+    pending/ expiration, so it's copied to claimed/ before being persisted.
+    """
+    if not image_key or not image_key.startswith(PENDING_PREFIX):
+        return image_key
+
+    claimed_key = CLAIMED_PREFIX + image_key[len(PENDING_PREFIX):]
+    try:
+        S3.copy_object(
+            Bucket=PHOTO_BUCKET,
+            CopySource={"Bucket": PHOTO_BUCKET, "Key": image_key},
+            Key=claimed_key,
+        )
+        S3.delete_object(Bucket=PHOTO_BUCKET, Key=image_key)
+    except ClientError as exc:
+        raise ValidationError(
+            "The uploaded photograph could not be found. Upload it again.",
+            ["imageKey"],
+        ) from exc
+    return claimed_key
+
+
 def _create(event, claims, groups):
     if not can_create(groups):
         return response(403, {"error": "Forbidden", "message": "You do not have permission to create assets."})
@@ -140,6 +170,9 @@ def _create(event, claims, groups):
             )
 
         payload["department"] = department
+
+    if payload.get("imageKey"):
+        payload["imageKey"] = _claim_photo(payload["imageKey"])
 
     if _existing_tag(payload["assetTag"]):
         return response(
@@ -247,6 +280,10 @@ def _update(event, asset_id, claims, groups):
     candidate["salvageValue"] = Decimal(str(candidate["salvageValue"]))
     candidate["updatedAt"] = datetime.now(timezone.utc).isoformat()
     candidate["updatedBy"] = claims.get("sub")
+
+    if "imageKey" in changed_fields and candidate.get("imageKey"):
+        candidate["imageKey"] = _claim_photo(candidate["imageKey"])
+
     old_tag = _asset_tag(existing["assetTag"])
     new_tag = candidate["assetTag"]
     if old_tag != new_tag:

@@ -208,6 +208,9 @@ Resources:
       FunctionName: !Sub smart-asset-api-${Environment}
       CodeUri: ../backend/asset_api/
       Handler: app.lambda_handler
+      Environment:
+        Variables:
+          ASSET_PHOTO_BUCKET: !Ref AssetPhotoBucket
       Policies:
         - Statement:
             - Sid: AssetTableReadWrite
@@ -219,6 +222,17 @@ Resources:
                 - dynamodb:Scan
                 - dynamodb:TransactWriteItems
               Resource: !GetAtt AssetTable.Arn
+            - Sid: ClaimPendingPhotos
+              Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:DeleteObject
+              Resource: !Sub ${AssetPhotoBucket.Arn}/pending/*
+            - Sid: WriteClaimedPhotos
+              Effect: Allow
+              Action:
+                - s3:PutObject
+              Resource: !Sub ${AssetPhotoBucket.Arn}/claimed/*
       Events:
         CreateAsset:
           Type: Api
