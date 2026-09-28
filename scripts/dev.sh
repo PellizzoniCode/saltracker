@@ -271,7 +271,7 @@ cmd_up() {
   cmd_test
   cmd_deploy
   cmd_seed
-  log "Done. Create a login with: scripts/dev.sh user -e you@example.com -p 'Your-Pass123!' -g Administrator -d IT"
+  log "Done. Create a login with: scripts/dev.sh user -e you@example.com -g Administrator -d IT (you'll be prompted for the password)"
   log "Then start the UI with:     scripts/dev.sh web"
 }
 
