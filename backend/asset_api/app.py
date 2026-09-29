@@ -243,6 +243,7 @@ def _list(event, claims, groups):
         request["ExclusiveStartKey"] = _decode_next_token(params["nextToken"])
 
     if groups.intersection({"Administrator", "Auditor"}):
+    result = TABLE.scan(**request)
 
     elif "Employee" in groups:
         request["IndexName"] = "AssignedUserIndex"
