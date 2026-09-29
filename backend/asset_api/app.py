@@ -197,6 +197,23 @@ def _get(asset_id, claims, groups):
         return response(403, {"error": "Forbidden", "message": "You do not have permission to view this asset."})
     return response(200, _clean_asset(item))
 
+def _encode_next_token(last_evaluated_key):
+    if not last_evaluated_key:
+        return None
+
+    raw = json.dumps(last_evaluated_key, default=_json_default).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("utf-8")
+
+
+def _decode_next_token(token):
+    if not token:
+        return None
+
+    try:
+        raw = base64.urlsafe_b64decode(token.encode("utf-8")).decode("utf-8")
+        return json.loads(raw)
+    except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+        raise ValidationError("Invalid nextToken.")
 
 def _list(event, claims, groups):
     params = event.get("queryStringParameters") or {}
@@ -221,6 +238,9 @@ def _list(event, claims, groups):
         "FilterExpression": filters,
         "Limit": 100,
     }
+
+    if params.get("nextToken"):
+    request["ExclusiveStartKey"] = _decode_next_token(params["nextToken"])
 
     if "Employee" in groups:
         request["IndexName"] = "AssignedUserIndex"
@@ -251,10 +271,15 @@ def _list(event, claims, groups):
 
     items = [_clean_asset(item) for item in result.get("Items", [])]
 
-    return response(200, {
-        "items": items,
-        "count": len(items),
-    })
+    body = {
+            "items": items,
+            "count": len(items),
+    }
+
+    if result.get("LastEvaluatedKey"):
+    body["nextToken"] = _encode_next_token(result["LastEvaluatedKey"])
+
+    return response(200, body)
 
 
 def _update(event, asset_id, claims, groups):
