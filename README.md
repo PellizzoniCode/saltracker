@@ -135,6 +135,65 @@ For employee record scoping, set each asset's `assignedUserId` to the user's Cog
 - Secrets and tokens must not be committed.
 - The current scan-based search is appropriate only for the small Week 1 dataset; production access patterns should use indexes.
 
-## Next milestone
+## Week 2: Secure Photo Intelligence
 
-Week 2 adds a private S3 bucket, presigned uploads, Bedrock image analysis with structured output, manual fallback, and mandatory human confirmation before saving AI suggestions.
+Week 2 expands the Smart Asset Lifecycle Tracker with secure asset-photo storage, Amazon Bedrock image analysis, and an authorized photo gallery.
+
+### Features completed
+
+- Private Amazon S3 bucket for asset photographs
+- S3 Block Public Access and server-side encryption
+- Five-minute presigned upload forms
+- JPEG and PNG validation with a 3.75 MB limit
+- Cognito role and department authorization
+- User-specific upload paths under `pending/{user-id}/`
+- S3-triggered asynchronous photo-analysis Lambda
+- Amazon Bedrock Nova Lite multimodal analysis
+- Structured and validated Bedrock JSON responses
+- Suggested asset category, model, description, condition, useful life, estimated production date, maintenance category, and estimated value
+- Manual approval before applying Bedrock suggestions
+- Secure photo gallery with short-lived image-access URLs
+- Backend authorization before every photo URL is generated
+- DynamoDB transactions for unique asset tags
+- CloudWatch logging and AWS X-Ray tracing
+- Realistic equipment photographs replacing placeholder records
+
+### Photo security
+
+Asset photographs are never publicly accessible.
+
+The backend generates a temporary image URL only after:
+
+1. API Gateway validates the Cognito token.
+2. Lambda reads the user identity and groups from verified Cognito claims.
+3. Lambda loads the asset record from DynamoDB.
+4. Lambda verifies the user’s role and access to that specific asset.
+5. Amazon S3 generates a short-lived presigned URL.
+
+Role, department, assignment, and ownership values supplied by the browser are not trusted.
+
+### Role-based photograph access
+
+- **Administrator:** access to all authorized asset photographs
+- **Auditor:** read-only access according to the application policy
+- **Manager:** photographs for assets in the manager’s department
+- **Technician:** photographs within the technician’s authorized scope
+- **Employee:** photographs for assets assigned to that employee
+- **Unauthenticated or unauthorized user:** receives a `401` or `403` response
+
+### Validation
+
+```bash
+python3 -m py_compile \
+  backend/asset_api/app.py \
+  backend/asset_api/domain.py \
+  backend/asset_api/photo_analysis.py
+
+python3 -m unittest discover -s backend/tests -v
+
+sam validate --template-file infrastructure/template.yaml
+sam build --template-file infrastructure/template.yaml
+
+cd frontend
+npm ci
+npm run build
