@@ -240,7 +240,7 @@ def _list(event, claims, groups):
     }
 
     if params.get("nextToken"):
-    request["ExclusiveStartKey"] = _decode_next_token(params["nextToken"])
+        request["ExclusiveStartKey"] = _decode_next_token(params["nextToken"])
 
     if "Employee" in groups:
         request["IndexName"] = "AssignedUserIndex"
@@ -277,7 +277,7 @@ def _list(event, claims, groups):
     }
 
     if result.get("LastEvaluatedKey"):
-    body["nextToken"] = _encode_next_token(result["LastEvaluatedKey"])
+        body["nextToken"] = _encode_next_token(result["LastEvaluatedKey"])
 
     return response(200, body)
 
