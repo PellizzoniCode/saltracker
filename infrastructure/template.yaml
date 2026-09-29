@@ -214,14 +214,17 @@ Resources:
       Policies:
         - Statement:
             - Sid: AssetTableReadWrite
-              Effect: Allow
-              Action:
-                - dynamodb:GetItem
-                - dynamodb:PutItem
-                - dynamodb:DeleteItem
-                - dynamodb:Scan
-                - dynamodb:TransactWriteItems
-              Resource: !GetAtt AssetTable.Arn
+          Effect: Allow
+           Action:
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:DeleteItem
+            - dynamodb:Scan
+            - dynamodb:Query
+            - dynamodb:TransactWriteItems
+          Resource:
+            - !GetAtt AssetTable.Arn
+            - !Sub '${AssetTable.Arn}/index/*'
       Events:
         CreateAsset:
           Type: Api
