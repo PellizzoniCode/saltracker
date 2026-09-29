@@ -211,20 +211,21 @@ Resources:
       FunctionName: !Sub smart-asset-api-${Environment}
       CodeUri: ../backend/asset_api/
       Handler: app.lambda_handler
-      Policies:
+            Policies:
         - Statement:
             - Sid: AssetTableReadWrite
-          Effect: Allow
-           Action:
-            - dynamodb:GetItem
-            - dynamodb:PutItem
-            - dynamodb:DeleteItem
-            - dynamodb:Scan
-            - dynamodb:Query
-            - dynamodb:TransactWriteItems
-          Resource:
-            - !GetAtt AssetTable.Arn
-            - !Sub '${AssetTable.Arn}/index/*'
+              Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:DeleteItem
+                - dynamodb:Scan
+                - dynamodb:Query
+                - dynamodb:TransactWriteItems
+              Resource:
+                - !GetAtt AssetTable.Arn
+                - !Sub '${AssetTable.Arn}/index/*'
+  
       Events:
         CreateAsset:
           Type: Api
