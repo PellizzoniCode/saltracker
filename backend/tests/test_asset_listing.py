@@ -207,6 +207,52 @@ class AssetListingTests(unittest.TestCase):
         self.table.scan.assert_called_once()
         self.table.query.assert_not_called()
 
+    def test_blank_index_fields_are_removed(self):
+        item = {
+            "assignedUserId": "",
+            "department": "   ",
+        }
+
+        result = self.api._normalise_index_fields(item)
+
+        self.assertNotIn("assignedUserId", result)
+        self.assertNotIn("department", result)
+
+    def test_valid_index_fields_are_trimmed(self):
+        item = {
+            "assignedUserId": " employee-123 ",
+            "department": " IT ",
+        }
+
+        result = self.api._normalise_index_fields(item)
+
+        self.assertEqual(
+            result["assignedUserId"],
+            "employee-123",
+        )
+        self.assertEqual(
+            result["department"],
+            "IT",
+        )
+
+    def test_invalid_index_field_type_is_rejected(self):
+        item = {
+            "assignedUserId": 123,
+        }
+
+        with self.assertRaises(self.api.ValidationError):
+            self.api._normalise_index_fields(item)
+
+    def test_manager_without_department_is_forbidden(self):
+        result = self.api._list(
+            self.event,
+            {"sub": "manager-123"},
+            {"Manager"},
+        )
+
+        self.assertEqual(result["statusCode"], 403)
+        self.table.query.assert_not_called()
+        self.table.scan.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()
