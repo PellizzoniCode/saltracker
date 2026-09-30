@@ -108,6 +108,37 @@ def _clean_asset(item):
         return None
     return {key: value for key, value in item.items() if key not in {"PK", "SK"}}
 
+def _clean_asset(item):
+    if not item:
+        return None
+
+    return {
+        key: value
+        for key, value in item.items()
+        if key not in {"PK", "SK"}
+    }
+
+
+def _normalise_index_fields(item):
+    for field in ("assignedUserId", "department"):
+        value = item.get(field)
+
+        if value is None or (
+            isinstance(value, str)
+            and not value.strip()
+        ):
+            item.pop(field, None)
+
+        elif not isinstance(value, str):
+            raise ValidationError(
+                f"{field} must be a string.",
+                [field],
+            )
+
+        else:
+            item[field] = value.strip()
+
+    return item
 
 def _create(event, claims, groups):
     if not can_create(groups):
@@ -152,16 +183,26 @@ def _create(event, claims, groups):
 
     asset_id = f"AST-{uuid.uuid4().hex[:8].upper()}"
     now = datetime.now(timezone.utc).isoformat()
+
     item = {
         **payload,
         **_asset_key(asset_id),
         "assetId": asset_id,
-        "depreciationMethod": payload.get("depreciationMethod", "straight-line"),
-        "reviewStatus": payload.get("reviewStatus", "ManualEntry"),
+        "depreciationMethod": payload.get(
+            "depreciationMethod",
+            "straight-line",
+        ),
+        "reviewStatus": payload.get(
+            "reviewStatus",
+            "ManualEntry",
+        ),
         "createdBy": claims.get("sub"),
         "createdAt": now,
         "updatedAt": now,
     }
+
+    item = _normalise_index_fields(item)
+
     item["purchaseValue"] = Decimal(str(item["purchaseValue"]))
     item["salvageValue"] = Decimal(str(item["salvageValue"]))
 
@@ -304,15 +345,27 @@ def _update(event, asset_id, claims, groups):
     if not validate_update_permissions(groups, changed_fields):
         return response(403, {"error": "Forbidden", "message": "You do not have permission to update these asset fields."})
 
-    candidate = {**_clean_asset(existing), **{k: v for k, v in payload.items() if k not in immutable}}
+    candidate = {
+        **_clean_asset(existing),
+        **{
+            key: value
+            for key, value in payload.items()
+            if key not in immutable
+        },
+    }
+
     validate_asset(candidate)
+    candidate = _normalise_index_fields(candidate)
+
     candidate["assetTag"] = _asset_tag(candidate["assetTag"])
     candidate["purchaseValue"] = Decimal(str(candidate["purchaseValue"]))
     candidate["salvageValue"] = Decimal(str(candidate["salvageValue"]))
     candidate["updatedAt"] = datetime.now(timezone.utc).isoformat()
     candidate["updatedBy"] = claims.get("sub")
+
     old_tag = _asset_tag(existing["assetTag"])
     new_tag = candidate["assetTag"]
+
     if old_tag != new_tag:
         if _existing_tag(new_tag, excluding_asset_id=asset_id):
             return response(409, {"error": "Conflict", "message": "An asset with this asset tag already exists."})
