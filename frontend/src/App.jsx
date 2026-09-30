@@ -396,8 +396,22 @@ if (analysisTimer.current) {
                 <tr key={asset.assetId}><td>{asset.assetTag}</td><td>{asset.category}</td><td>{asset.description}</td><td>{asset.department || "—"}</td><td><span className="status">{asset.status}</span></td></tr>
               ))}
             </tbody>
-          </table>
+                    </table>
         </div>
+
+        {nextToken && (
+          <button
+            className="secondary"
+            onClick={() =>
+              loadAssets({
+                append: true,
+                token: nextToken,
+              })
+            }
+          >
+            Load more
+          </button>
+        )}
       </section>
     </main>
   );
