@@ -102,12 +102,6 @@ def _condition_failed(exc):
     return any(reason.get("Code") == "ConditionalCheckFailed"
                for reason in exc.response.get("CancellationReasons", []))
 
-
-def _clean_asset(item):
-    if not item:
-        return None
-    return {key: value for key, value in item.items() if key not in {"PK", "SK"}}
-
 def _clean_asset(item):
     if not item:
         return None
