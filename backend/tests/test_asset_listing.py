@@ -144,6 +144,55 @@ class AssetListingTests(unittest.TestCase):
         self.table.scan.assert_called_once()
         self.table.query.assert_not_called()
 
+    def test_list_returns_next_token_when_more_items_exist(self):
+        self.table.scan.return_value = {
+            "Items": [],
+            "LastEvaluatedKey": {
+                "PK": "ASSET#123",
+                "SK": "METADATA",
+            },
+        }
+
+        result = self.api._list(
+            self.event,
+            {"sub": "admin-123"},
+            {"Administrator"},
+        )
+
+        body = json.loads(result["body"])
+
+        self.assertEqual(result["statusCode"], 200)
+        self.assertIn("nextToken", body)
+
+    def test_list_uses_next_token_as_exclusive_start_key(self):
+        last_key = {
+            "PK": "ASSET#123",
+            "SK": "METADATA",
+        }
+
+        token = self.api._encode_next_token(last_key)
+
+        event = {
+            "queryStringParameters": {
+                "nextToken": token,
+            }
+        }
+
+        self.table.scan.return_value = {"Items": []}
+
+        result = self.api._list(
+            event,
+            {"sub": "admin-123"},
+            {"Administrator"},
+        )
+
+        self.assertEqual(result["statusCode"], 200)
+
+        request = self.table.scan.call_args.kwargs
+        self.assertEqual(
+            request["ExclusiveStartKey"],
+            last_key,
+        )
 
 if __name__ == "__main__":
     unittest.main()
