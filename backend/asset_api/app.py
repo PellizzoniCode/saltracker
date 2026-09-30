@@ -243,12 +243,7 @@ def _list(event, claims, groups):
         request["ExclusiveStartKey"] = _decode_next_token(params["nextToken"])
 
     if groups.intersection({"Administrator", "Auditor"}):
-    result = TABLE.scan(**request)
-
-    elif "Employee" in groups:
-        request["IndexName"] = "AssignedUserIndex"
-        request["KeyConditionExpression"] = Key("assignedUserId").eq(claims["sub"])
-        result = TABLE.query(**request)
+        result = TABLE.scan(**request)
 
     elif groups.intersection({"Manager", "Technician"}):
         department = claims.get("custom:department")
@@ -263,6 +258,10 @@ def _list(event, claims, groups):
         request["KeyConditionExpression"] = Key("department").eq(department)
         result = TABLE.query(**request)
 
+    elif "Employee" in groups:
+        request["IndexName"] = "AssignedUserIndex"
+        request["KeyConditionExpression"] = Key("assignedUserId").eq(claims["sub"])
+        result = TABLE.query(**request)
 
     else:
         return response(403, {
