@@ -369,10 +369,44 @@ if (analysisTimer.current) {
         </div>
         <div className="table-wrap">
           <table>
-            <thead><tr><th>Tag</th><th>Category</th><th>Description</th><th>Department</th><th>Status</th></tr></thead>
+           <thead>
+  <tr>
+    <th>Tag</th>
+    <th>Category</th>
+    <th>Description</th>
+    <th>Location</th>
+    <th>Department</th>
+    <th>Status</th>
+    <th>Book value</th>
+    <th>Life used</th>
+    <th>Replacement date</th>
+  </tr>
+</thead>
             <tbody>
               {assets.map((asset) => (
-                <tr key={asset.assetId}><td>{asset.assetTag}</td><td>{asset.category}</td><td>{asset.description}</td><td>{asset.department || "—"}</td><td><span className="status">{asset.status}</span></td></tr>
+                <tr key={asset.assetId}>
+  <td>{asset.assetTag}</td>
+  <td>{asset.category}</td>
+  <td>{asset.description}</td>
+  <td>{asset.location || "—"}</td>
+  <td>{asset.department || "—"}</td>
+  <td>
+    <span className="status">{asset.status}</span>
+  </td>
+  <td>
+    {asset.depreciation
+      ? `$${asset.depreciation.currentBookValue}`
+      : "—"}
+  </td>
+  <td>
+    {asset.depreciation
+      ? `${asset.depreciation.usefulLifeConsumedPercent}%`
+      : "—"}
+  </td>
+  <td>
+    {asset.depreciation?.estimatedReplacementDate || "—"}
+  </td>
+</tr>
               ))}
             </tbody>
           </table>
