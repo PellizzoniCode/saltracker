@@ -194,5 +194,19 @@ class AssetListingTests(unittest.TestCase):
             last_key,
         )
 
+    def test_administrator_takes_priority_over_employee(self):
+        self.table.scan.return_value = {"Items": []}
+
+        result = self.api._list(
+            self.event,
+            {"sub": "admin-employee-123"},
+            {"Administrator", "Employee"},
+        )
+
+        self.assertEqual(result["statusCode"], 200)
+        self.table.scan.assert_called_once()
+        self.table.query.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
