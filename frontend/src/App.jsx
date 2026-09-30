@@ -37,6 +37,7 @@ async function api(path, options = {}) {
 
 function AssetApplication({ signOut, user }) {
   const [assets, setAssets] = useState([]);
+  const [nextToken, setNextToken] = useState(null);
   const [form, setForm] = useState(emptyAsset);
   const [message, setMessage] = useState("");
   const [query, setQuery] = useState("");
