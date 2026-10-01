@@ -21,6 +21,7 @@ from domain import (
     validate_update_permissions,
 )
 
+from depreciation import DepreciationError, calculate_depreciation
 
 LOGGER = logging.getLogger()
 LOGGER.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
@@ -112,6 +113,41 @@ def _clean_asset(item):
         return None
     return {key: value for key, value in item.items() if key not in {"PK", "SK"}}
 
+def _asset_view(item):
+    asset = _clean_asset(item)
+    if not asset:
+        return None
+
+    required_fields = (
+        "purchaseValue",
+        "salvageValue",
+        "usefulLifeMonths",
+        "inServiceDate",
+    )
+
+    if any(asset.get(field) in (None, "") for field in required_fields):
+        asset["depreciation"] = None
+        asset["depreciationStatus"] = "Unavailable"
+        return asset
+
+    try:
+        asset["depreciation"] = calculate_depreciation(
+            purchase_value=asset["purchaseValue"],
+            salvage_value=asset["salvageValue"],
+            useful_life_months=asset["usefulLifeMonths"],
+            in_service_date=asset["inServiceDate"],
+        )
+        asset["depreciationStatus"] = "Calculated"
+    except DepreciationError as exc:
+        LOGGER.warning(
+            "Depreciation unavailable assetId=%s reason=%s",
+            asset.get("assetId"),
+            str(exc),
+        )
+        asset["depreciation"] = None
+        asset["depreciationStatus"] = "Unavailable"
+
+    return asset
 
 def _create(event, claims, groups):
     if not can_create(groups):
@@ -196,14 +232,84 @@ def _create(event, claims, groups):
     LOGGER.info("Asset created assetId=%s actorSub=%s", asset_id, claims.get("sub"))
     return response(201, {"assetId": asset_id, "message": "Asset created successfully."})
 
-
 def _get(asset_id, claims, groups):
+    item = TABLE.get_item(
+        Key=_asset_key(asset_id),
+        ConsistentRead=True,
+    ).get("Item")
+
+    if not item:
+        return response(
+            404,
+            {
+                "error": "NotFound",
+                "message": "Asset was not found.",
+            },
+        )
+
+    if not can_read(groups, claims, item):
+        return response(
+            403,
+            {
+                "error": "Forbidden",
+                "message": "You do not have permission to view this asset.",
+            },
+        )
+
+    return response(200, _asset_view(item))
+
+
+def _photo_analysis_key(photo_key):
+    return {"PK": f"PHOTO#{photo_key}", "SK": "ANALYSIS"}
+
+
+def _get_photo(asset_id, claims, groups):
     item = TABLE.get_item(Key=_asset_key(asset_id), ConsistentRead=True).get("Item")
     if not item:
         return response(404, {"error": "NotFound", "message": "Asset was not found."})
     if not can_read(groups, claims, item):
-        return response(403, {"error": "Forbidden", "message": "You do not have permission to view this asset."})
-    return response(200, _clean_asset(item))
+        return response(
+            403,
+            {
+                "error": "Forbidden",
+                "message": "You do not have permission to view this asset photograph.",
+            },
+        )
+
+    photo_key = item.get("imageKey")
+    if not photo_key:
+        return response(
+            404,
+            {"error": "NotFound", "message": "This asset does not have a photograph."},
+        )
+    if not PHOTO_BUCKET or not photo_key.startswith(("pending/", "assets/")):
+        LOGGER.error("Invalid photo configuration assetId=%s photoKey=%s", asset_id, photo_key)
+        return response(
+            500,
+            {"error": "InternalServerError", "message": "The asset photograph is unavailable."},
+        )
+
+    photo_url = S3.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": PHOTO_BUCKET, "Key": photo_key},
+        ExpiresIn=PHOTO_URL_EXPIRES_IN,
+    )
+    analysis = TABLE.get_item(
+        Key=_photo_analysis_key(photo_key),
+        ConsistentRead=True,
+    ).get("Item")
+
+    LOGGER.info("Asset photo viewed assetId=%s actorSub=%s", asset_id, claims.get("sub"))
+    return response(
+        200,
+        {
+            "assetId": asset_id,
+            "photoUrl": photo_url,
+            "expiresIn": PHOTO_URL_EXPIRES_IN,
+            "analysisStatus": analysis.get("status", "Processing") if analysis else "Processing",
+            "suggestion": analysis.get("suggestion") if analysis else None,
+        },
+    )
 
 
 def _photo_analysis_key(photo_key):
@@ -262,10 +368,13 @@ def _get_photo(asset_id, claims, groups):
 def _list(event, claims, groups):
     params = event.get("queryStringParameters") or {}
     filters = Attr("SK").eq("METADATA")
+
     if params.get("status"):
         filters &= Attr("status").eq(params["status"])
+
     if params.get("category"):
         filters &= Attr("category").eq(params["category"])
+
     if params.get("q"):
         query = params["q"]
         filters &= (
@@ -275,9 +384,19 @@ def _list(event, claims, groups):
         )
 
     result = TABLE.scan(FilterExpression=filters, Limit=100)
-    permitted = [_clean_asset(item) for item in result.get("Items", []) if can_read(groups, claims, item)]
-    return response(200, {"items": permitted, "count": len(permitted)})
+    permitted = [
+        _asset_view(item)
+        for item in result.get("Items", [])
+        if can_read(groups, claims, item)
+    ]
 
+    return response(
+        200,
+        {
+            "items": permitted,
+            "count": len(permitted),
+        },
+    )
 
 def _update(event, asset_id, claims, groups):
     existing = TABLE.get_item(Key=_asset_key(asset_id), ConsistentRead=True).get("Item")
