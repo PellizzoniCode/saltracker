@@ -374,7 +374,6 @@ if (analysisTimer.current) {
     <th>Tag</th>
     <th>Category</th>
     <th>Description</th>
-    <th>Location</th>
     <th>Department</th>
     <th>Status</th>
     <th>Book value</th>
@@ -388,7 +387,6 @@ if (analysisTimer.current) {
   <td>{asset.assetTag}</td>
   <td>{asset.category}</td>
   <td>{asset.description}</td>
-  <td>{asset.location || "—"}</td>
   <td>{asset.department || "—"}</td>
   <td>
     <span className="status">{asset.status}</span>
