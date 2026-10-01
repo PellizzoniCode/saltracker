@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Authenticator } from "@aws-amplify/ui-react";
 
 import { fetchAuthSession } from "aws-amplify/auth";
+
+import "./photo-analysis.css";
 
 const API_URL = import.meta.env.VITE_API_URL;
 
@@ -74,6 +76,21 @@ function AssetApplication({ signOut, user }) {
 
   const [query, setQuery] = useState("");
 const [saving, setSaving] = useState(false);
+
+  const [photo, setPhoto] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [photoMessage, setPhotoMessage] = useState("");
+  const photoInput = useRef(null);
+
+  const [analysis, setAnalysis] = useState(null);
+  const [analysisMessage, setAnalysisMessage] = useState("");
+  const [checkingAnalysis, setCheckingAnalysis] = useState(false);
+  const analysisTimer = useRef(null);
+
+  const [galleryItems, setGalleryItems] = useState([]);
+  const [galleryLoading, setGalleryLoading] = useState(false);
+  const [galleryMessage, setGalleryMessage] = useState("");
+  const [photoPreview, setPhotoPreview] = useState("");
 
   const loadAssets = useCallback(async () => {
 
