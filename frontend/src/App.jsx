@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Authenticator } from "@aws-amplify/ui-react";
 import { fetchAuthSession } from "aws-amplify/auth";
 
+import "./photo-analysis.css";
+
 const API_URL = import.meta.env.VITE_API_URL;
 
 const emptyAsset = {
