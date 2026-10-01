@@ -197,7 +197,11 @@ def _create(event, claims, groups):
         **_asset_key(asset_id),
         "assetId": asset_id,
         "depreciationMethod": payload.get("depreciationMethod", "straight-line"),
-        "reviewStatus": payload.get("reviewStatus", "ManualEntry"),
+        "depreciationMethod": payload.get(
+    "depreciationMethod",
+    "straight-line",
+),
+"createdBy": claims.get("sub"),
         "createdBy": claims.get("sub"),
         "createdAt": now,
         "updatedAt": now,
@@ -253,6 +257,59 @@ def _get(asset_id, claims, groups):
         )
 
     return response(200, _asset_view(item))
+
+
+def _photo_analysis_key(photo_key):
+    return {"PK": f"PHOTO#{photo_key}", "SK": "ANALYSIS"}
+
+
+def _get_photo(asset_id, claims, groups):
+    item = TABLE.get_item(Key=_asset_key(asset_id), ConsistentRead=True).get("Item")
+    if not item:
+        return response(404, {"error": "NotFound", "message": "Asset was not found."})
+    if not can_read(groups, claims, item):
+        return response(
+            403,
+            {
+                "error": "Forbidden",
+                "message": "You do not have permission to view this asset photograph.",
+            },
+        )
+
+    photo_key = item.get("imageKey")
+    if not photo_key:
+        return response(
+            404,
+            {"error": "NotFound", "message": "This asset does not have a photograph."},
+        )
+    if not PHOTO_BUCKET or not photo_key.startswith(("pending/", "assets/")):
+        LOGGER.error("Invalid photo configuration assetId=%s photoKey=%s", asset_id, photo_key)
+        return response(
+            500,
+            {"error": "InternalServerError", "message": "The asset photograph is unavailable."},
+        )
+
+    photo_url = S3.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": PHOTO_BUCKET, "Key": photo_key},
+        ExpiresIn=PHOTO_URL_EXPIRES_IN,
+    )
+    analysis = TABLE.get_item(
+        Key=_photo_analysis_key(photo_key),
+        ConsistentRead=True,
+    ).get("Item")
+
+    LOGGER.info("Asset photo viewed assetId=%s actorSub=%s", asset_id, claims.get("sub"))
+    return response(
+        200,
+        {
+            "assetId": asset_id,
+            "photoUrl": photo_url,
+            "expiresIn": PHOTO_URL_EXPIRES_IN,
+            "analysisStatus": analysis.get("status", "Processing") if analysis else "Processing",
+            "suggestion": analysis.get("suggestion") if analysis else None,
+        },
+    )
 
 
 def _photo_analysis_key(photo_key):
