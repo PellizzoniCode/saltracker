@@ -51,6 +51,7 @@ function AssetApplication({ signOut, user }) {
   const [galleryItems, setGalleryItems] = useState([]);
   const [galleryLoading, setGalleryLoading] = useState(false);
   const [galleryMessage, setGalleryMessage] = useState("");
+  const [photoPreview, setPhotoPreview] = useState("");
   const analysisTimer = useRef(null);
 
   const loadAssets = useCallback(async () => {
