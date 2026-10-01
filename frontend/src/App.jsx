@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Authenticator } from "@aws-amplify/ui-react";
 import { fetchAuthSession } from "aws-amplify/auth";
+import "./photo-analysis.css";
 
 const API_URL = import.meta.env.VITE_API_URL;
 
 const emptyAsset = {
   assetTag: "",
-  category: "Laptop",
+  category: "",
   description: "",
   manufacturer: "",
   model: "",
@@ -15,11 +16,9 @@ const emptyAsset = {
   inServiceDate: "",
   purchaseValue: "",
   salvageValue: "0.00",
-  usefulLifeMonths: 48,
+  usefulLifeMonths: "",
   department: "",
   assignedUserId: "",
-  condition: "Good",
-  status: "Available",
   imageKey: "",
 };
 
@@ -51,6 +50,7 @@ function AssetApplication({ signOut, user }) {
   const [galleryItems, setGalleryItems] = useState([]);
   const [galleryLoading, setGalleryLoading] = useState(false);
   const [galleryMessage, setGalleryMessage] = useState("");
+  const [photoPreview, setPhotoPreview] = useState("");
   const analysisTimer = useRef(null);
 
   const loadAssets = useCallback(async () => {
@@ -453,14 +453,11 @@ if (analysisTimer.current) {
                       <p className="asset-photo-tag">{asset.assetTag}</p>
                       <h3>{asset.category || "Uncategorized asset"}</h3>
                     </div>
-                    <span className="status">{asset.status}</span>
                   </div>
                   <p>{asset.description || "No description provided."}</p>
                   <dl className="asset-photo-meta">
                     <dt>Department</dt>
                     <dd>{asset.department || "—"}</dd>
-                    <dt>Condition</dt>
-                    <dd>{asset.condition || "—"}</dd>
                   </dl>
 
                   <div className="gallery-analysis">
@@ -507,9 +504,7 @@ if (analysisTimer.current) {
     <th>Tag</th>
     <th>Category</th>
     <th>Description</th>
-    <th>Location</th>
     <th>Department</th>
-    <th>Status</th>
     <th>Book value</th>
     <th>Life used</th>
     <th>Replacement date</th>
@@ -521,11 +516,7 @@ if (analysisTimer.current) {
   <td>{asset.assetTag}</td>
   <td>{asset.category}</td>
   <td>{asset.description}</td>
-  <td>{asset.location || "—"}</td>
   <td>{asset.department || "—"}</td>
-  <td>
-    <span className="status">{asset.status}</span>
-  </td>
   <td>
     {asset.depreciation
       ? `$${asset.depreciation.currentBookValue}`
