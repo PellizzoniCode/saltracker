@@ -26,6 +26,11 @@ from maintenance import (
     validate_maintenance,
 )
 
+from maintenance_ai import (
+    MaintenanceAiError,
+    generate_maintenance_advice,
+)
+
 from maintenance_recommendation import (
     MaintenanceRecommendationError,
     calculate_maintenance_recommendation,
@@ -448,6 +453,99 @@ def _list_maintenance(asset_id, claims, groups):
         },
     )
 
+def _generate_maintenance_recommendation(
+    asset_id,
+    claims,
+    groups,
+):
+    asset = TABLE.get_item(
+        Key=_asset_key(asset_id),
+        ConsistentRead=True,
+    ).get("Item")
+
+    if not asset:
+        return response(
+            404,
+            {
+                "error": "NotFound",
+                "message": "Asset was not found.",
+            },
+        )
+
+    if not can_read(groups, claims, asset):
+        return response(
+            403,
+            {
+                "error": "Forbidden",
+                "message": (
+                    "You cannot generate recommendations "
+                    "for this asset."
+                ),
+            },
+        )
+
+    if (
+        "Administrator" not in groups
+        and "Technician" not in groups
+    ):
+        return response(
+            403,
+            {
+                "error": "Forbidden",
+                "message": (
+                    "Only an Administrator or Technician can "
+                    "generate AI maintenance recommendations."
+                ),
+            },
+        )
+
+    history_result = TABLE.query(
+        KeyConditionExpression=(
+            "PK = :pk AND begins_with(SK, :maintenance)"
+        ),
+        ExpressionAttributeValues={
+            ":pk": f"ASSET#{asset_id}",
+            ":maintenance": "MAINTENANCE#",
+        },
+        ScanIndexForward=False,
+        Limit=10,
+    )
+
+    history = [
+        _clean_asset(item)
+        for item in history_result.get("Items", [])
+    ]
+
+    clean_asset = _clean_asset(asset)
+
+    schedule = calculate_maintenance_recommendation(
+        clean_asset,
+        maintenance_history=history,
+    )
+
+    ai_recommendation = generate_maintenance_advice(
+        clean_asset,
+        history,
+        schedule,
+    )
+
+    LOGGER.info(
+        "AI maintenance recommendation generated "
+        "assetId=%s actorSub=%s",
+        asset_id,
+        claims.get("sub"),
+    )
+
+    return response(
+        200,
+        {
+            "assetId": asset_id,
+            "schedule": schedule,
+            "aiRecommendation": ai_recommendation,
+            "generatedForReview": True,
+        },
+    )
+
 def lambda_handler(event, _context):
     method = event.get("httpMethod", "")
     asset_id = (event.get("pathParameters") or {}).get("assetId")
@@ -464,6 +562,19 @@ def lambda_handler(event, _context):
         )
 
     try:
+        if (
+            method == "POST"
+            and asset_id
+            and route.endswith(
+                "/maintenance-recommendation"
+            )
+        ):
+            return _generate_maintenance_recommendation(
+                asset_id,
+                claims,
+                groups,
+            )
+
         if (
             method == "POST"
             and asset_id
@@ -507,6 +618,22 @@ def lambda_handler(event, _context):
             },
         )
 
+    except MaintenanceAiError as exc:
+        LOGGER.warning(
+            "Invalid Bedrock maintenance response: %s",
+            exc,
+        )
+        return response(
+            502,
+            {
+                "error": "AiRecommendationError",
+                "message": (
+                    "The AI recommendation could not be "
+                    "validated. Try again later."
+                ),
+            },
+        )
+    
     except MaintenanceValidationError as exc:
         return response(
             400,

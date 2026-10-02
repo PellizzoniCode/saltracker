@@ -69,7 +69,6 @@ Resources:
               - http://localhost:5180
             AllowedHeaders: ['*']
             MaxAge: 300
-
   UserPool:
     Type: AWS::Cognito::UserPool
     Properties:
@@ -95,7 +94,6 @@ Resources:
           AttributeDataType: String
           Mutable: true
           Required: false
-
   UserPoolClient:
     Type: AWS::Cognito::UserPoolClient
     Properties:
@@ -114,7 +112,6 @@ Resources:
       ExplicitAuthFlows:
         - ALLOW_USER_SRP_AUTH
         - ALLOW_REFRESH_TOKEN_AUTH
-
   EmployeeGroup:
     Type: AWS::Cognito::UserPoolGroup
     Properties:
@@ -122,7 +119,6 @@ Resources:
       Description: View assigned assets and report problems
       UserPoolId: !Ref UserPool
       Precedence: 50
-
   TechnicianGroup:
     Type: AWS::Cognito::UserPoolGroup
     Properties:
@@ -130,7 +126,6 @@ Resources:
       Description: Create assets and update operational asset data
       UserPoolId: !Ref UserPool
       Precedence: 40
-
   ManagerGroup:
     Type: AWS::Cognito::UserPoolGroup
     Properties:
@@ -138,7 +133,6 @@ Resources:
       Description: View department assets and reports
       UserPoolId: !Ref UserPool
       Precedence: 30
-
   AdministratorGroup:
     Type: AWS::Cognito::UserPoolGroup
     Properties:
@@ -146,7 +140,6 @@ Resources:
       Description: Full asset and user administration
       UserPoolId: !Ref UserPool
       Precedence: 10
-
   AuditorGroup:
     Type: AWS::Cognito::UserPoolGroup
     Properties:
@@ -154,7 +147,6 @@ Resources:
       Description: Read-only audit access
       UserPoolId: !Ref UserPool
       Precedence: 20
-
   AssetApi:
     Type: AWS::Serverless::Api
     Properties:
@@ -186,13 +178,19 @@ Resources:
               Access-Control-Allow-Origin: "'*'"
           ResponseTemplates:
             application/json: '{"error":"Forbidden","message":"You do not have permission to perform this action."}'
-
   AssetApiFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub smart-asset-api-${Environment}
       CodeUri: ../backend/asset_api/
+
       Handler: app.lambda_handler
+
+      Timeout: 30
+      Environment:
+        Variables:
+          MAINTENANCE_MODEL_ID: us.amazon.nova-lite-v1:0
+
       Policies:
         - Statement:
             - Sid: AssetTableReadWrite
@@ -205,6 +203,24 @@ Resources:
                 - dynamodb:Query
                 - dynamodb:TransactWriteItems
               Resource: !GetAtt AssetTable.Arn
+            - Sid: InvokeMaintenanceNovaLiteProfile
+              Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.amazon.nova-lite-v1:0
+
+            - Sid: InvokeMaintenanceNovaLiteModels
+              Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource:
+                - !Sub arn:${AWS::Partition}:bedrock:us-east-1::foundation-model/amazon.nova-lite-v1:0
+                - !Sub arn:${AWS::Partition}:bedrock:us-east-2::foundation-model/amazon.nova-lite-v1:0
+                - !Sub arn:${AWS::Partition}:bedrock:us-west-2::foundation-model/amazon.nova-lite-v1:0
+              Condition:
+                StringEquals:
+                  bedrock:InferenceProfileArn: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.amazon.nova-lite-v1:0
+
       Events:
         CreateAsset:
           Type: Api
@@ -242,6 +258,12 @@ Resources:
             RestApiId: !Ref AssetApi
             Path: /assets/{assetId}/maintenance
             Method: GET
+        GenerateMaintenanceRecommendation:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AssetApi
+            Path: /assets/{assetId}/maintenance-recommendation
+            Method: POST
 
   PhotoUploadFunction:
     Type: AWS::Serverless::Function

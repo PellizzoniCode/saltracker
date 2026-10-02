@@ -3,6 +3,7 @@ import pathlib
 import sys
 import unittest
 
+from unittest.mock import patch
 
 TEST_DIR = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(TEST_DIR))
@@ -58,6 +59,28 @@ class MaintenanceApiTests(unittest.TestCase):
             },
             "body": json.dumps(payload or MAINTENANCE),
         }
+    def recommendation_event(
+        self,
+        group="Administrator",
+        sub="user-1",
+        department="IT",
+    ):
+        event = self.event(
+            group=group,
+            sub=sub,
+        )
+        event["resource"] = (
+            "/assets/{assetId}/maintenance-recommendation"
+        )
+        event["path"] = (
+            "/assets/AST-TEST/maintenance-recommendation"
+        )
+        event["requestContext"]["authorizer"]["claims"][
+            "custom:department"
+        ] = department
+        event.pop("body")
+
+        return event
 
     def test_administrator_can_create_maintenance(self):
         result = self.api.lambda_handler(
@@ -223,6 +246,133 @@ class MaintenanceApiTests(unittest.TestCase):
 
         self.assertEqual(result["statusCode"], 403)
         self.table.query.assert_not_called()
+
+    def test_administrator_can_generate_ai_recommendation(self):
+        self.table.query.return_value = {
+            "Items": [],
+        }
+
+        ai_result = {
+            "recommendedActions": [
+                "Clean the ventilation openings."
+            ],
+            "riskLevel": "Low",
+            "rationale": "Routine preventive maintenance.",
+            "reviewStatus": "NeedsReview",
+        }
+
+        with patch.object(
+            self.api,
+            "generate_maintenance_advice",
+            return_value=ai_result,
+        ) as generate:
+            result = self.api.lambda_handler(
+                self.recommendation_event(),
+                None,
+            )
+
+        body = json.loads(result["body"])
+
+        self.assertEqual(result["statusCode"], 200)
+        self.assertEqual(
+            body["aiRecommendation"]["riskLevel"],
+            "Low",
+        )
+        self.assertTrue(body["generatedForReview"])
+        generate.assert_called_once()
+
+    def test_technician_can_generate_ai_recommendation(self):
+        self.table.query.return_value = {
+            "Items": [],
+        }
+
+        ai_result = {
+            "recommendedActions": [
+                "Inspect the battery."
+            ],
+            "riskLevel": "Medium",
+            "rationale": "Preventive inspection is due.",
+            "reviewStatus": "NeedsReview",
+        }
+
+        with patch.object(
+            self.api,
+            "generate_maintenance_advice",
+            return_value=ai_result,
+        ):
+            result = self.api.lambda_handler(
+                self.recommendation_event(
+                    group="Technician",
+                    sub="technician-1",
+                ),
+                None,
+            )
+
+        self.assertEqual(result["statusCode"], 200)
+
+    def test_employee_cannot_generate_ai_recommendation(self):
+        with patch.object(
+            self.api,
+            "generate_maintenance_advice",
+        ) as generate:
+            result = self.api.lambda_handler(
+                self.recommendation_event(
+                    group="Employee",
+                    sub="employee-1",
+                ),
+                None,
+            )
+
+        self.assertEqual(result["statusCode"], 403)
+        generate.assert_not_called()
+        self.table.query.assert_not_called()
+
+    def test_other_department_technician_cannot_generate(self):
+        with patch.object(
+            self.api,
+            "generate_maintenance_advice",
+        ) as generate:
+            result = self.api.lambda_handler(
+                self.recommendation_event(
+                    group="Technician",
+                    sub="technician-1",
+                    department="Finance",
+                ),
+                None,
+            )
+
+        self.assertEqual(result["statusCode"], 403)
+        generate.assert_not_called()
+        self.table.query.assert_not_called()
+
+    def test_invalid_bedrock_response_returns_502(self):
+        self.table.query.return_value = {
+            "Items": [],
+        }
+
+        with patch.object(
+            self.api,
+            "generate_maintenance_advice",
+            side_effect=self.api.MaintenanceAiError(
+                "Invalid model response."
+            ),
+        ):
+            result = self.api.lambda_handler(
+                self.recommendation_event(),
+                None,
+            )
+
+        body = json.loads(result["body"])
+
+        self.assertEqual(result["statusCode"], 502)
+        self.assertEqual(
+            body["error"],
+            "AiRecommendationError",
+        )
+        self.assertNotIn(
+            "Invalid model response",
+            body["message"],
+        )
 
 
 if __name__ == "__main__":
