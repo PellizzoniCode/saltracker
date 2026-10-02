@@ -20,6 +20,8 @@ ASSET = {
     "assignedUserId": "employee-1",
     "condition": "Good",
     "status": "Available",
+    "purchaseDate": "2026-09-01",
+    "inServiceDate": "2026-09-01",
 }
 
 MAINTENANCE = {
@@ -188,6 +190,19 @@ class MaintenanceApiTests(unittest.TestCase):
 
         self.assertEqual(result["statusCode"], 200)
         self.assertEqual(body["count"], 1)
+        self.assertIn("recommendation", body)
+        self.assertIn(
+            body["recommendation"]["maintenanceStatus"],
+            {"Current", "DueSoon", "Overdue"},
+        )
+        self.assertIn(
+            "recommendedCleaningDate",
+            body["recommendation"],
+        )
+        self.assertIn(
+            "recommendedMaintenanceDate",
+            body["recommendation"],
+        )
         self.assertEqual(
             body["items"][0]["maintenanceId"],
             "MNT-12345678",

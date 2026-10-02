@@ -26,6 +26,11 @@ from maintenance import (
     validate_maintenance,
 )
 
+from maintenance_recommendation import (
+    MaintenanceRecommendationError,
+    calculate_maintenance_recommendation,
+)
+
 LOGGER = logging.getLogger()
 LOGGER.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 TABLE = boto3.resource("dynamodb").Table(os.environ["ASSET_TABLE_NAME"])
@@ -421,6 +426,17 @@ def _list_maintenance(asset_id, claims, groups):
         _clean_asset(item)
         for item in result.get("Items", [])
     ]
+    
+    try:
+        recommendation = calculate_maintenance_recommendation(
+            _clean_asset(asset),
+            maintenance_history=items,
+        )
+    except MaintenanceRecommendationError as exc:
+        recommendation = {
+            "maintenanceStatus": "Unavailable",
+            "message": str(exc),
+        }
 
     return response(
         200,
@@ -428,6 +444,7 @@ def _list_maintenance(asset_id, claims, groups):
             "assetId": asset_id,
             "items": items,
             "count": len(items),
+            "recommendation": recommendation,
         },
     )
 
