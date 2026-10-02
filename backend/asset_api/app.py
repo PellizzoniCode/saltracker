@@ -12,12 +12,17 @@ from boto3.dynamodb.types import TypeSerializer
 from botocore.exceptions import ClientError
 
 from domain import (
+    MAINTENANCE_FIELDS,
+    SERVICE_DATE_FIELDS,
     ValidationError,
     can_create,
+    can_manage_maintenance,
     can_read,
+    can_record_maintenance,
     parse_groups,
     validate_asset,
     validate_create_permissions,
+    validate_maintenance,
     validate_update_permissions,
 )
 
@@ -27,6 +32,9 @@ LOGGER.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 TABLE = boto3.resource("dynamodb").Table(os.environ["ASSET_TABLE_NAME"])
 TRANSACTIONS = boto3.client("dynamodb")
 SERIALIZER = TypeSerializer()
+MAINTENANCE_PREFIX = "MAINTENANCE#"
+MAINTENANCE_COLLECTION = "/assets/{assetId}/maintenance"
+MAINTENANCE_ITEM = "/assets/{assetId}/maintenance/{maintenanceId}"
 
 
 def response(status_code, body):
@@ -317,6 +325,27 @@ def _list(event, claims, groups):
     return response(200, body)
 
 
+def _service_dates_guard(existing):
+    """Condition that the asset's service dates still hold the values this update read.
+
+    Recording maintenance moves these dates forward in its own transaction; without
+    this guard a concurrent asset update would write the stale values back.
+    """
+    clauses, names, values = [], {}, {}
+    for index, field in enumerate(SERVICE_DATE_FIELDS):
+        name = f"#sd{index}"
+        names[name] = field
+        if existing.get(field) is not None:
+            clauses.append(f"{name} = :sd{index}")
+            values[f":sd{index}"] = existing[field]
+        elif field in existing:
+            clauses.append(f"attribute_type({name}, :sdnull)")
+            values[":sdnull"] = "NULL"
+        else:
+            clauses.append(f"attribute_not_exists({name})")
+    return " AND ".join(clauses), names, values
+
+
 def _update(event, asset_id, claims, groups):
     existing = TABLE.get_item(Key=_asset_key(asset_id), ConsistentRead=True).get("Item")
     if not existing:
@@ -359,6 +388,7 @@ def _update(event, asset_id, claims, groups):
 
     old_tag = _asset_tag(existing["assetTag"])
     new_tag = candidate["assetTag"]
+    dates_guard, guard_names, guard_values = _service_dates_guard(existing)
 
     if old_tag != new_tag:
         if _existing_tag(new_tag, excluding_asset_id=asset_id):
@@ -373,8 +403,12 @@ def _update(event, asset_id, claims, groups):
             {"Put": {
                 "TableName": TABLE.name,
                 "Item": _wire_item({**candidate, **_asset_key(asset_id)}),
-                "ConditionExpression": "attribute_exists(PK) AND assetTag = :old_tag",
-                "ExpressionAttributeValues": {":old_tag": SERIALIZER.serialize(existing["assetTag"])},
+                "ConditionExpression": f"attribute_exists(PK) AND assetTag = :old_tag AND {dates_guard}",
+                "ExpressionAttributeNames": guard_names,
+                "ExpressionAttributeValues": {
+                    ":old_tag": SERIALIZER.serialize(existing["assetTag"]),
+                    **{key: SERIALIZER.serialize(value) for key, value in guard_values.items()},
+                },
             }},
         ]
         old_reservation = TABLE.get_item(Key=_tag_key(old_tag), ConsistentRead=True).get("Item")
@@ -395,13 +429,291 @@ def _update(event, asset_id, claims, groups):
         try:
             TABLE.put_item(
                 Item={**candidate, **_asset_key(asset_id)},
-                ConditionExpression="attribute_exists(PK) AND assetTag = :old_tag",
-                ExpressionAttributeValues={":old_tag": existing["assetTag"]},
+                ConditionExpression=f"attribute_exists(PK) AND assetTag = :old_tag AND {dates_guard}",
+                ExpressionAttributeNames=guard_names,
+                ExpressionAttributeValues={":old_tag": existing["assetTag"], **guard_values},
             )
         except TABLE.meta.client.exceptions.ConditionalCheckFailedException:
             return response(409, {"error": "Conflict", "message": "The asset changed during your update. Refresh and try again."})
     LOGGER.info("Asset updated assetId=%s actorSub=%s fields=%s", asset_id, claims.get("sub"), sorted(changed_fields))
     return response(200, {"assetId": asset_id, "message": "Asset updated successfully."})
+
+
+def _maintenance_key(asset_id, performed_date, maintenance_id):
+    return {"PK": f"ASSET#{asset_id}", "SK": f"{MAINTENANCE_PREFIX}{performed_date}#{maintenance_id}"}
+
+
+def _maintenance_partition(asset_id):
+    return Key("PK").eq(f"ASSET#{asset_id}") & Key("SK").begins_with(MAINTENANCE_PREFIX)
+
+
+def _load_asset_for(asset_id, claims, groups):
+    """Return (asset, None) when the caller may see the asset, else (None, error response)."""
+    asset = TABLE.get_item(Key=_asset_key(asset_id), ConsistentRead=True).get("Item")
+    if not asset:
+        return None, response(404, {"error": "NotFound", "message": "Asset was not found."})
+    if not can_read(groups, claims, asset):
+        return None, response(403, {"error": "Forbidden", "message": "You do not have permission to view this asset."})
+    return asset, None
+
+
+def _find_maintenance(asset_id, maintenance_id):
+    """The sort key embeds the date, so look the record up by ID within the asset partition."""
+    params = {
+        "KeyConditionExpression": _maintenance_partition(asset_id),
+        "FilterExpression": Attr("maintenanceId").eq(maintenance_id),
+        "ConsistentRead": True,
+    }
+    while True:
+        page = TABLE.query(**params)
+        for item in page.get("Items", []):
+            if item.get("maintenanceId") == maintenance_id:
+                return item
+        if "LastEvaluatedKey" not in page:
+            return None
+        params["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+
+
+def _normalise_maintenance(payload):
+    notes = payload.get("notes")
+    cost = payload.get("cost")
+    return {
+        "performedDate": payload["performedDate"],
+        "maintenanceType": payload["maintenanceType"],
+        "notes": notes.strip() if isinstance(notes, str) and notes.strip() else None,
+        "cost": None if cost in (None, "") else Decimal(str(cost)),
+        "conditionAfterService": payload.get("conditionAfterService"),
+    }
+
+
+def _asset_date_bump(asset, record):
+    """Transactional update moving the asset's service dates forward, or [] when already current."""
+    performed = record["performedDate"]
+    fields = ["lastMaintenanceDate"]
+    if record["maintenanceType"] == "Cleaning":
+        fields.append("lastCleaningDate")
+
+    stale = [
+        field for field in fields
+        if not isinstance(asset.get(field), str) or not asset[field] or asset[field] < performed
+    ]
+    if not stale:
+        return []
+
+    names = {f"#f{index}": field for index, field in enumerate(stale)}
+    assignments = ", ".join(f"{name} = :date" for name in names)
+    # A concurrent request may already have recorded a later date; the
+    # condition then cancels the transaction instead of moving it backwards.
+    guards = " AND ".join(
+        f"(attribute_not_exists({name}) OR NOT attribute_type({name}, :string) OR {name} < :date)"
+        for name in names
+    )
+    return [{"Update": {
+        "TableName": TABLE.name,
+        "Key": _wire_item(_asset_key(asset["assetId"])),
+        "UpdateExpression": f"SET {assignments}",
+        "ConditionExpression": f"attribute_exists(PK) AND {guards}",
+        "ExpressionAttributeNames": names,
+        "ExpressionAttributeValues": {
+            ":date": SERIALIZER.serialize(performed),
+            ":string": SERIALIZER.serialize("S"),
+        },
+    }}]
+
+
+def _list_maintenance(event, asset_id, claims, groups):
+    _, denied = _load_asset_for(asset_id, claims, groups)
+    if denied:
+        return denied
+
+    params = event.get("queryStringParameters") or {}
+    request = {
+        "KeyConditionExpression": _maintenance_partition(asset_id),
+        "ScanIndexForward": False,
+        "Limit": 50,
+    }
+
+    if params.get("nextToken"):
+        start = _decode_next_token(params["nextToken"])
+        if (not isinstance(start, dict) or start.get("PK") != f"ASSET#{asset_id}"
+                or not str(start.get("SK", "")).startswith(MAINTENANCE_PREFIX)):
+            raise ValidationError("Invalid nextToken.")
+        request["ExclusiveStartKey"] = start
+
+    result = TABLE.query(**request)
+    items = [_clean_asset(item) for item in result.get("Items", [])]
+    body = {"items": items, "count": len(items)}
+
+    if result.get("LastEvaluatedKey"):
+        body["nextToken"] = _encode_next_token(result["LastEvaluatedKey"])
+
+    return response(200, body)
+
+
+def _create_maintenance(event, asset_id, claims, groups):
+    if not can_record_maintenance(groups):
+        return response(403, {"error": "Forbidden", "message": "You do not have permission to record maintenance."})
+
+    asset, denied = _load_asset_for(asset_id, claims, groups)
+    if denied:
+        return denied
+
+    payload = _body(event)
+    validate_maintenance(payload)
+
+    maintenance_id = f"MNT-{uuid.uuid4().hex[:8].upper()}"
+    fields = _normalise_maintenance(payload)
+    item = {
+        **fields,
+        **_maintenance_key(asset_id, fields["performedDate"], maintenance_id),
+        "maintenanceId": maintenance_id,
+        "assetId": asset_id,
+        # Always the authenticated identity; validate_maintenance rejects a client-supplied value.
+        "performedBy": claims["sub"],
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+    try:
+        TRANSACTIONS.transact_write_items(TransactItems=[
+            {"Put": {
+                "TableName": TABLE.name,
+                "Item": _wire_item(item),
+                "ConditionExpression": "attribute_not_exists(PK)",
+            }},
+            *_asset_date_bump(asset, fields),
+        ])
+    except ClientError as exc:
+        if _condition_failed(exc):
+            return response(409, {"error": "Conflict", "message": "The asset changed while recording maintenance. Refresh and try again."})
+        raise
+
+    LOGGER.info("Maintenance recorded assetId=%s maintenanceId=%s actorSub=%s", asset_id, maintenance_id, claims["sub"])
+    return response(201, {"assetId": asset_id, "maintenanceId": maintenance_id, "message": "Maintenance recorded successfully."})
+
+
+def _get_maintenance(asset_id, maintenance_id, claims, groups):
+    _, denied = _load_asset_for(asset_id, claims, groups)
+    if denied:
+        return denied
+
+    item = _find_maintenance(asset_id, maintenance_id)
+    if not item:
+        return response(404, {"error": "NotFound", "message": "Maintenance record was not found."})
+    return response(200, _clean_asset(item))
+
+
+def _update_maintenance(event, asset_id, maintenance_id, claims, groups):
+    if not can_manage_maintenance(groups):
+        return response(403, {"error": "Forbidden", "message": "Only an Administrator can change maintenance records."})
+
+    asset, denied = _load_asset_for(asset_id, claims, groups)
+    if denied:
+        return denied
+
+    existing = _find_maintenance(asset_id, maintenance_id)
+    if not existing:
+        return response(404, {"error": "NotFound", "message": "Maintenance record was not found."})
+
+    payload = _body(event)
+    validate_maintenance(payload, partial=True)
+    if not payload:
+        raise ValidationError("No editable fields were supplied.")
+
+    merged = {field: existing.get(field) for field in MAINTENANCE_FIELDS}
+    merged.update(payload)
+    validate_maintenance(merged)
+
+    fields = _normalise_maintenance(merged)
+    new_key = _maintenance_key(asset_id, fields["performedDate"], maintenance_id)
+    item = {
+        **_clean_asset(existing),
+        **fields,
+        **new_key,
+        "updatedAt": datetime.now(timezone.utc).isoformat(),
+        "updatedBy": claims["sub"],
+    }
+
+    if existing["SK"] == new_key["SK"]:
+        writes = [{"Put": {
+            "TableName": TABLE.name,
+            "Item": _wire_item(item),
+            "ConditionExpression": "attribute_exists(PK)",
+        }}]
+    else:
+        # The date is part of the sort key, so re-dating moves the record.
+        writes = [
+            {"Delete": {
+                "TableName": TABLE.name,
+                "Key": _wire_item({"PK": existing["PK"], "SK": existing["SK"]}),
+                "ConditionExpression": "maintenanceId = :maintenance_id",
+                "ExpressionAttributeValues": {":maintenance_id": SERIALIZER.serialize(maintenance_id)},
+            }},
+            {"Put": {
+                "TableName": TABLE.name,
+                "Item": _wire_item(item),
+                "ConditionExpression": "attribute_not_exists(PK)",
+            }},
+        ]
+
+    service_changed = (fields["performedDate"] != existing.get("performedDate")
+                       or fields["maintenanceType"] != existing.get("maintenanceType"))
+    if service_changed:
+        writes.extend(_asset_date_bump(asset, fields))
+
+    try:
+        TRANSACTIONS.transact_write_items(TransactItems=writes)
+    except ClientError as exc:
+        if _condition_failed(exc):
+            return response(409, {"error": "Conflict", "message": "The maintenance record changed during your update. Refresh and try again."})
+        raise
+
+    LOGGER.info("Maintenance updated assetId=%s maintenanceId=%s actorSub=%s fields=%s",
+                asset_id, maintenance_id, claims["sub"], sorted(payload))
+    return response(200, {"assetId": asset_id, "maintenanceId": maintenance_id, "message": "Maintenance record updated successfully."})
+
+
+def _delete_maintenance(asset_id, maintenance_id, claims, groups):
+    if not can_manage_maintenance(groups):
+        return response(403, {"error": "Forbidden", "message": "Only an Administrator can delete maintenance records."})
+
+    _, denied = _load_asset_for(asset_id, claims, groups)
+    if denied:
+        return denied
+
+    existing = _find_maintenance(asset_id, maintenance_id)
+    if not existing:
+        return response(404, {"error": "NotFound", "message": "Maintenance record was not found."})
+
+    try:
+        TABLE.delete_item(
+            Key={"PK": existing["PK"], "SK": existing["SK"]},
+            ConditionExpression="maintenanceId = :maintenance_id",
+            ExpressionAttributeValues={":maintenance_id": maintenance_id},
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return response(404, {"error": "NotFound", "message": "Maintenance record was not found."})
+        raise
+
+    LOGGER.info("Maintenance deleted assetId=%s maintenanceId=%s actorSub=%s", asset_id, maintenance_id, claims["sub"])
+    return response(200, {"assetId": asset_id, "maintenanceId": maintenance_id, "message": "Maintenance record deleted successfully."})
+
+
+def _route_maintenance(event, method, asset_id, claims, groups):
+    maintenance_id = (event.get("pathParameters") or {}).get("maintenanceId")
+    if event.get("resource") == MAINTENANCE_COLLECTION:
+        if method == "GET":
+            return _list_maintenance(event, asset_id, claims, groups)
+        if method == "POST":
+            return _create_maintenance(event, asset_id, claims, groups)
+    elif maintenance_id:
+        if method == "GET":
+            return _get_maintenance(asset_id, maintenance_id, claims, groups)
+        if method == "PUT":
+            return _update_maintenance(event, asset_id, maintenance_id, claims, groups)
+        if method == "DELETE":
+            return _delete_maintenance(asset_id, maintenance_id, claims, groups)
+    return response(405, {"error": "MethodNotAllowed", "message": "Method is not supported."})
 
 
 def lambda_handler(event, _context):
@@ -413,6 +725,8 @@ def lambda_handler(event, _context):
         return response(401, {"error": "Unauthorized", "message": "Sign in to access this resource."})
 
     try:
+        if asset_id and event.get("resource") in (MAINTENANCE_COLLECTION, MAINTENANCE_ITEM):
+            return _route_maintenance(event, method, asset_id, claims, groups)
         if method == "POST" and not asset_id:
             return _create(event, claims, groups)
         if method == "GET" and asset_id:

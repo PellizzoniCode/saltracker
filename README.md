@@ -10,7 +10,7 @@ The starter implements the Week 1 foundation:
 - Cognito user pool and five application groups
 - API Gateway Cognito authorizer
 - DynamoDB asset table
-- Python Lambda REST API for create, list, view, and update
+- Python Lambda REST API for create, list, view, and update, plus per-asset maintenance history (`/assets/{assetId}/maintenance`)
 - Backend RBAC and record-scope authorization
 - React login and manual asset-entry interface
 - Ten sample assets and unit tests

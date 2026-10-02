@@ -186,7 +186,7 @@ Resources:
           CognitoAuthorizer:
             UserPoolArn: !GetAtt UserPool.Arn
       Cors:
-        AllowMethods: "'GET,POST,PUT,OPTIONS'"
+        AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
         AllowHeaders: "'Content-Type,Authorization'"
         AllowOrigin: "'*'"
       GatewayResponses:
@@ -218,6 +218,7 @@ Resources:
               Action:
                 - dynamodb:GetItem
                 - dynamodb:PutItem
+                - dynamodb:UpdateItem
                 - dynamodb:DeleteItem
                 - dynamodb:Scan
                 - dynamodb:Query
@@ -251,6 +252,36 @@ Resources:
             RestApiId: !Ref AssetApi
             Path: /assets/{assetId}
             Method: PUT
+        ListMaintenance:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AssetApi
+            Path: /assets/{assetId}/maintenance
+            Method: GET
+        CreateMaintenance:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AssetApi
+            Path: /assets/{assetId}/maintenance
+            Method: POST
+        GetMaintenance:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AssetApi
+            Path: /assets/{assetId}/maintenance/{maintenanceId}
+            Method: GET
+        UpdateMaintenance:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AssetApi
+            Path: /assets/{assetId}/maintenance/{maintenanceId}
+            Method: PUT
+        DeleteMaintenance:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AssetApi
+            Path: /assets/{assetId}/maintenance/{maintenanceId}
+            Method: DELETE
 
   PhotoUploadFunction:
     Type: AWS::Serverless::Function

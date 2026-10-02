@@ -120,6 +120,31 @@ class UniqueTagTests(unittest.TestCase):
         self.assertEqual(writes[0]["Put"]["Item"]["PK"], {"S": "ASSET_TAG#TAG-0002"})
         self.assertEqual(writes[2]["Delete"]["Key"]["PK"], {"S": "ASSET_TAG#TAG-0001"})
 
+    def test_update_requires_service_dates_unchanged(self):
+        existing = {**ASSET, "assetId": "AST-OWN", "PK": "ASSET#AST-OWN", "SK": "METADATA",
+                    "lastMaintenanceDate": "2026-01-01"}
+        self.table.get_item.return_value = {"Item": existing}
+        event = {"body": json.dumps({"description": "Updated"})}
+        result = self.api._update(event, "AST-OWN", {"sub": "admin"}, {"Administrator"})
+        self.assertEqual(result["statusCode"], 200)
+        request = self.table.put_item.call_args.kwargs
+        self.assertIn("#sd0 = :sd0", request["ConditionExpression"])
+        self.assertIn("attribute_not_exists(#sd1)", request["ConditionExpression"])
+        self.assertEqual(request["ExpressionAttributeNames"], {"#sd0": "lastMaintenanceDate", "#sd1": "lastCleaningDate"})
+        self.assertEqual(request["ExpressionAttributeValues"][":sd0"], "2026-01-01")
+
+    def test_tag_rename_requires_service_dates_unchanged(self):
+        existing = {**ASSET, "assetId": "AST-OWN", "PK": "ASSET#AST-OWN", "SK": "METADATA",
+                    "lastCleaningDate": "2026-02-01"}
+        self.table.get_item.side_effect = [{"Item": existing}, {}]
+        self.table.scan.return_value = {"Items": []}
+        event = {"body": json.dumps({"assetTag": "TAG-0002"})}
+        result = self.api._update(event, "AST-OWN", {"sub": "admin"}, {"Administrator"})
+        self.assertEqual(result["statusCode"], 200)
+        put = self.transactions.transact_write_items.call_args.kwargs["TransactItems"][1]["Put"]
+        self.assertIn("#sd1 = :sd1", put["ConditionExpression"])
+        self.assertEqual(put["ExpressionAttributeValues"][":sd1"], {"S": "2026-02-01"})
+
     def test_concurrent_tag_reservation_conflict_returns_409(self):
         self.table.scan.return_value = {"Items": []}
         self.transactions.transact_write_items.side_effect = _ClientError({

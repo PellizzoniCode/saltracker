@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Authenticator } from "@aws-amplify/ui-react";
 import { fetchAuthSession } from "aws-amplify/auth";
+import MaintenanceHistory from "./MaintenanceHistory.jsx";
 
 const API_URL = import.meta.env.VITE_API_URL;
 
@@ -50,6 +51,15 @@ function AssetApplication({ signOut, user }) {
   const [analysisMessage, setAnalysisMessage] = useState("");
   const [checkingAnalysis, setCheckingAnalysis] = useState(false);
   const analysisTimer = useRef(null);
+  const [groups, setGroups] = useState([]);
+  const [selectedAsset, setSelectedAsset] = useState(null);
+
+  useEffect(() => {
+    // Used only to show or hide controls; the API enforces every permission.
+    fetchAuthSession()
+      .then((session) => setGroups(session.tokens?.idToken?.payload?.["cognito:groups"] || []))
+      .catch(() => setGroups([]));
+  }, []);
 
   const loadAssets = useCallback(async ({
     append = false,
@@ -393,7 +403,7 @@ if (analysisTimer.current) {
             <thead><tr><th>Tag</th><th>Category</th><th>Description</th><th>Department</th><th>Status</th></tr></thead>
             <tbody>
               {assets.map((asset) => (
-                <tr key={asset.assetId}><td>{asset.assetTag}</td><td>{asset.category}</td><td>{asset.description}</td><td>{asset.department || "—"}</td><td><span className="status">{asset.status}</span></td></tr>
+                <tr key={asset.assetId}><td><button className="link" onClick={() => setSelectedAsset(asset)}>{asset.assetTag}</button></td><td>{asset.category}</td><td>{asset.description}</td><td>{asset.department || "—"}</td><td><span className="status">{asset.status}</span></td></tr>
               ))}
             </tbody>
                     </table>
@@ -413,6 +423,15 @@ if (analysisTimer.current) {
           </button>
         )}
       </section>
+
+      {selectedAsset && (
+        <MaintenanceHistory
+          api={api}
+          asset={selectedAsset}
+          groups={groups}
+          onClose={() => setSelectedAsset(null)}
+        />
+      )}
     </main>
   );
 }

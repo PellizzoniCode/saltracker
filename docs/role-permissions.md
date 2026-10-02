@@ -11,7 +11,9 @@
 | Set assignment fields (`assignedUserId`, `department`) on create | No | No | No | Yes | No |
 | Update operational fields | No | Yes | No | Yes | No |
 | Update financial/assignment fields | No | No | No | Yes | No |
-| Record maintenance | No | Planned | No | Planned | No |
+| View maintenance history of visible assets | Yes | Yes | Yes | Yes | Yes |
+| Record maintenance | No | Yes (own department) | No | Yes | No |
+| Correct or delete maintenance records | No | No | No | Yes | No |
 | Manage users and assignments | No | No | No | Planned | No |
 
 ## SailPoint mapping
@@ -41,3 +43,4 @@ These policies prevent a user from modifying the same asset records they indepen
 
 A `Technician` creating a new asset cannot set `assignedUserId` or `department` — the same restriction that applies when updating an existing asset. Without this, asset creation would be a backdoor around the assignment-field lock on updates.
 
+Maintenance records keep `performedBy` from the signed-in Cognito identity; no role, including Administrator, can set or change it. Only an Administrator can correct or delete a record, so a Technician cannot rewrite the history of their own work.

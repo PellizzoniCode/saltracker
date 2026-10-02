@@ -26,7 +26,7 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; }
-button, input { font: inherit; }
+button, input, select, textarea { font: inherit; }
 main { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 38px 0 72px; }
 header { display: flex; justify-content: space-between; align-items: start; gap: 24px; margin-bottom: 28px; }
 h1 { margin: 4px 0 8px; font-size: clamp(2rem, 5vw, 3.25rem); letter-spacing: -0.04em; }
@@ -51,5 +51,11 @@ table { width: 100%; border-collapse: collapse; }
 th, td { padding: 13px 12px; text-align: left; border-bottom: 1px solid #e4e9ef; }
 th { color: #626d7f; font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; }
 .status { display: inline-block; border-radius: 999px; background: #edf4ff; color: #255ea8; padding: 4px 9px; font-size: .8rem; }
+.maintenance-form { margin-top: 20px; }
+.maintenance-form .maintenance-notes { grid-column: span 2; }
+.maintenance-message { color: #28756c; }
+select, textarea { width: 100%; border: 1px solid #cbd4df; border-radius: 9px; padding: 11px 12px; background: #fbfcfd; }
+button.link { padding: 0; background: none; color: #28756c; text-decoration: underline; font-weight: 700; }
+@media (max-width: 760px) { .maintenance-form .maintenance-notes { grid-column: auto; } }
 @media (max-width: 760px) { .panel form { grid-template-columns: 1fr; } header, .section-heading { align-items: stretch; flex-direction: column; } }
 
