@@ -202,6 +202,7 @@ Resources:
                 - dynamodb:PutItem
                 - dynamodb:DeleteItem
                 - dynamodb:Scan
+                - dynamodb:Query
                 - dynamodb:TransactWriteItems
               Resource: !GetAtt AssetTable.Arn
       Events:
@@ -229,6 +230,18 @@ Resources:
             RestApiId: !Ref AssetApi
             Path: /assets/{assetId}
             Method: PUT
+        CreateMaintenance:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AssetApi
+            Path: /assets/{assetId}/maintenance
+            Method: POST
+        ListMaintenance:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AssetApi
+            Path: /assets/{assetId}/maintenance
+            Method: GET
 
   PhotoUploadFunction:
     Type: AWS::Serverless::Function

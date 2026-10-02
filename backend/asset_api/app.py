@@ -21,6 +21,10 @@ from domain import (
     validate_update_permissions,
 )
 
+from maintenance import (
+    MaintenanceValidationError,
+    validate_maintenance,
+)
 
 LOGGER = logging.getLogger()
 LOGGER.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
@@ -292,27 +296,226 @@ def _update(event, asset_id, claims, groups):
     LOGGER.info("Asset updated assetId=%s actorSub=%s fields=%s", asset_id, claims.get("sub"), sorted(changed_fields))
     return response(200, {"assetId": asset_id, "message": "Asset updated successfully."})
 
+def _create_maintenance(event, asset_id, claims, groups):
+    asset = TABLE.get_item(
+        Key=_asset_key(asset_id),
+        ConsistentRead=True,
+    ).get("Item")
+
+    if not asset:
+        return response(
+            404,
+            {
+                "error": "NotFound",
+                "message": "Asset was not found.",
+            },
+        )
+
+    if not can_read(groups, claims, asset):
+        return response(
+            403,
+            {
+                "error": "Forbidden",
+                "message": "You cannot add maintenance to this asset.",
+            },
+        )
+
+    if (
+        "Administrator" not in groups
+        and "Technician" not in groups
+    ):
+        return response(
+            403,
+            {
+                "error": "Forbidden",
+                "message": (
+                    "Only an Administrator or Technician can "
+                    "record maintenance."
+                ),
+            },
+        )
+
+    maintenance = validate_maintenance(_body(event))
+    now = datetime.now(timezone.utc).isoformat()
+    maintenance_id = f"MNT-{uuid.uuid4().hex[:8].upper()}"
+
+    item = {
+        **maintenance,
+        "PK": f"ASSET#{asset_id}",
+        "SK": f"MAINTENANCE#{now}#{maintenance_id}",
+        "maintenanceId": maintenance_id,
+        "assetId": asset_id,
+        "performedBy": claims.get("sub"),
+        "performedByEmail": claims.get("email"),
+        "createdAt": now,
+    }
+
+    item = {
+        key: value
+        for key, value in item.items()
+        if value is not None
+    }
+
+    TABLE.put_item(
+        Item=item,
+        ConditionExpression=(
+            "attribute_not_exists(PK) AND "
+            "attribute_not_exists(SK)"
+        ),
+    )
+
+    LOGGER.info(
+        "Maintenance created assetId=%s maintenanceId=%s actorSub=%s",
+        asset_id,
+        maintenance_id,
+        claims.get("sub"),
+    )
+
+    return response(
+        201,
+        {
+            "assetId": asset_id,
+            "maintenanceId": maintenance_id,
+            "message": "Maintenance recorded successfully.",
+        },
+    )
+
+def _list_maintenance(asset_id, claims, groups):
+    asset = TABLE.get_item(
+        Key=_asset_key(asset_id),
+        ConsistentRead=True,
+    ).get("Item")
+
+    if not asset:
+        return response(
+            404,
+            {
+                "error": "NotFound",
+                "message": "Asset was not found.",
+            },
+        )
+
+    if not can_read(groups, claims, asset):
+        return response(
+            403,
+            {
+                "error": "Forbidden",
+                "message": (
+                    "You do not have permission to view "
+                    "maintenance for this asset."
+                ),
+            },
+        )
+    result = TABLE.query(
+    KeyConditionExpression=(
+        "PK = :pk AND begins_with(SK, :maintenance)"
+    ),
+    ExpressionAttributeValues={
+        ":pk": f"ASSET#{asset_id}",
+        ":maintenance": "MAINTENANCE#",
+    },
+    ScanIndexForward=False,
+)
+    
+    items = [
+        _clean_asset(item)
+        for item in result.get("Items", [])
+    ]
+
+    return response(
+        200,
+        {
+            "assetId": asset_id,
+            "items": items,
+            "count": len(items),
+        },
+    )
 
 def lambda_handler(event, _context):
     method = event.get("httpMethod", "")
     asset_id = (event.get("pathParameters") or {}).get("assetId")
+    route = event.get("resource") or event.get("path") or ""
     claims, groups = _identity(event)
 
     if not claims.get("sub"):
-        return response(401, {"error": "Unauthorized", "message": "Sign in to access this resource."})
+        return response(
+            401,
+            {
+                "error": "Unauthorized",
+                "message": "Sign in to access this resource.",
+            },
+        )
 
     try:
+        if (
+            method == "POST"
+            and asset_id
+            and route.endswith("/maintenance")
+        ):
+            return _create_maintenance(
+                event,
+                asset_id,
+                claims,
+                groups,
+            )
+
+        if (
+            method == "GET"
+            and asset_id
+            and route.endswith("/maintenance")
+        ):
+            return _list_maintenance(
+                asset_id,
+                claims,
+                groups,
+            )
+
         if method == "POST" and not asset_id:
             return _create(event, claims, groups)
+
         if method == "GET" and asset_id:
             return _get(asset_id, claims, groups)
+
         if method == "GET":
             return _list(event, claims, groups)
+
         if method == "PUT" and asset_id:
             return _update(event, asset_id, claims, groups)
-        return response(405, {"error": "MethodNotAllowed", "message": "Method is not supported."})
+
+        return response(
+            405,
+            {
+                "error": "MethodNotAllowed",
+                "message": "Method is not supported.",
+            },
+        )
+
+    except MaintenanceValidationError as exc:
+        return response(
+            400,
+            {
+                "error": "ValidationError",
+                "message": str(exc),
+                "fields": exc.fields,
+            },
+        )
+
     except ValidationError as exc:
-        return response(400, {"error": "ValidationError", "message": str(exc), "fields": exc.fields})
+        return response(
+            400,
+            {
+                "error": "ValidationError",
+                "message": str(exc),
+                "fields": exc.fields,
+            },
+        )
+
     except Exception:
         LOGGER.exception("Unhandled asset API error")
-        return response(500, {"error": "InternalServerError", "message": "The request could not be completed."})
+        return response(
+            500,
+            {
+                "error": "InternalServerError",
+                "message": "The request could not be completed.",
+            },
+        )
