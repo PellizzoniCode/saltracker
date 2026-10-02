@@ -37,11 +37,29 @@ Resources:
           AttributeType: S
         - AttributeName: SK
           AttributeType: S
+        - AttributeName: assignedUserId
+          AttributeType: S
+        - AttributeName: department
+          AttributeType: S
       KeySchema:
         - AttributeName: PK
           KeyType: HASH
         - AttributeName: SK
           KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: AssignedUserIndex
+          KeySchema:
+            - AttributeName: assignedUserId
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: DepartmentIndex
+          KeySchema:
+            - AttributeName: department
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+
   AssetPhotoBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
@@ -202,8 +220,12 @@ Resources:
                 - dynamodb:PutItem
                 - dynamodb:DeleteItem
                 - dynamodb:Scan
+                - dynamodb:Query
                 - dynamodb:TransactWriteItems
-              Resource: !GetAtt AssetTable.Arn
+              Resource:
+                - !GetAtt AssetTable.Arn
+                - !Sub '${AssetTable.Arn}/index/*'
+                
       Events:
         CreateAsset:
           Type: Api

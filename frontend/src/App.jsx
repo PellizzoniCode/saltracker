@@ -37,6 +37,7 @@ async function api(path, options = {}) {
 
 function AssetApplication({ signOut, user }) {
   const [assets, setAssets] = useState([]);
+  const [nextToken, setNextToken] = useState(null);
   const [form, setForm] = useState(emptyAsset);
   const [message, setMessage] = useState("");
   const [query, setQuery] = useState("");
@@ -50,10 +51,30 @@ function AssetApplication({ signOut, user }) {
   const [checkingAnalysis, setCheckingAnalysis] = useState(false);
   const analysisTimer = useRef(null);
 
-  const loadAssets = useCallback(async () => {
+  const loadAssets = useCallback(async ({
+    append = false,
+    token = null,
+  } = {}) => {
     try {
-      const result = await api(`/assets${query ? `?q=${encodeURIComponent(query)}` : ""}`);
-      setAssets(result.items);
+      const params = new URLSearchParams();
+
+      if (query) {
+        params.set("q", query);
+      }
+
+      if (token) {
+        params.set("nextToken", token);
+      }
+
+      const queryString = params.toString();
+      const result = await api(
+        `/assets${queryString ? `?${queryString}` : ""}`
+      );
+
+      setAssets((current) =>
+        append ? [...current, ...result.items] : result.items
+      );
+      setNextToken(result.nextToken || null);
       setMessage("");
     } catch (error) {
       setMessage(error.message);
@@ -375,8 +396,22 @@ if (analysisTimer.current) {
                 <tr key={asset.assetId}><td>{asset.assetTag}</td><td>{asset.category}</td><td>{asset.description}</td><td>{asset.department || "—"}</td><td><span className="status">{asset.status}</span></td></tr>
               ))}
             </tbody>
-          </table>
+                    </table>
         </div>
+
+        {nextToken && (
+          <button
+            className="secondary"
+            onClick={() =>
+              loadAssets({
+                append: true,
+                token: nextToken,
+              })
+            }
+          >
+            Load more
+          </button>
+        )}
       </section>
     </main>
   );
