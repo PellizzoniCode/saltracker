@@ -115,10 +115,13 @@ def _clean_asset(item):
 
 
 def _claim_photo(image_key):
-    """Move a pending photo out of the prefix the S3 lifecycle rule expires.
+    """Copy a pending photo to the prefix the S3 lifecycle rule leaves alone.
 
     Once an asset's imageKey points at it, the photo must outlive the 7-day
     pending/ expiration, so it's copied to claimed/ before being persisted.
+    The pending object is kept until the asset write succeeds, so a rejected
+    or failed save can be retried with the same imageKey. The copy is
+    idempotent, so retrying simply overwrites the same claimed/ key.
     """
     if not image_key or not image_key.startswith(PENDING_PREFIX):
         return image_key
@@ -130,13 +133,26 @@ def _claim_photo(image_key):
             CopySource={"Bucket": PHOTO_BUCKET, "Key": image_key},
             Key=claimed_key,
         )
-        S3.delete_object(Bucket=PHOTO_BUCKET, Key=image_key)
     except ClientError as exc:
         raise ValidationError(
             "The uploaded photograph could not be found. Upload it again.",
             ["imageKey"],
         ) from exc
     return claimed_key
+
+
+def _release_pending_photo(pending_key):
+    """Best-effort removal of a pending photo once its asset has been saved.
+
+    A failure here must not fail a save that already succeeded; the pending/
+    lifecycle rule expires anything left behind.
+    """
+    if not pending_key or not pending_key.startswith(PENDING_PREFIX):
+        return
+    try:
+        S3.delete_object(Bucket=PHOTO_BUCKET, Key=pending_key)
+    except ClientError:
+        LOGGER.warning("Could not delete claimed pending photo key=%s", pending_key, exc_info=True)
 
 
 def _create(event, claims, groups):
@@ -171,8 +187,9 @@ def _create(event, claims, groups):
 
         payload["department"] = department
 
-    if payload.get("imageKey"):
-        payload["imageKey"] = _claim_photo(payload["imageKey"])
+    pending_key = payload.get("imageKey")
+    if pending_key:
+        payload["imageKey"] = _claim_photo(pending_key)
 
     if _existing_tag(payload["assetTag"]):
         return response(
@@ -218,6 +235,7 @@ def _create(event, claims, groups):
             return response(409, {"error": "Conflict", "message": "An asset with this asset tag already exists."})
         raise
 
+    _release_pending_photo(pending_key)
     LOGGER.info("Asset created assetId=%s actorSub=%s", asset_id, claims.get("sub"))
     return response(201, {"assetId": asset_id, "message": "Asset created successfully."})
 
@@ -281,8 +299,10 @@ def _update(event, asset_id, claims, groups):
     candidate["updatedAt"] = datetime.now(timezone.utc).isoformat()
     candidate["updatedBy"] = claims.get("sub")
 
+    pending_key = None
     if "imageKey" in changed_fields and candidate.get("imageKey"):
-        candidate["imageKey"] = _claim_photo(candidate["imageKey"])
+        pending_key = candidate["imageKey"]
+        candidate["imageKey"] = _claim_photo(pending_key)
 
     old_tag = _asset_tag(existing["assetTag"])
     new_tag = candidate["assetTag"]
@@ -326,6 +346,7 @@ def _update(event, asset_id, claims, groups):
             )
         except TABLE.meta.client.exceptions.ConditionalCheckFailedException:
             return response(409, {"error": "Conflict", "message": "The asset changed during your update. Refresh and try again."})
+    _release_pending_photo(pending_key)
     LOGGER.info("Asset updated assetId=%s actorSub=%s fields=%s", asset_id, claims.get("sub"), sorted(changed_fields))
     return response(200, {"assetId": asset_id, "message": "Asset updated successfully."})
 

@@ -135,7 +135,7 @@ class ClaimPendingPhotoTests(unittest.TestCase):
     def setUp(self):
         self.api, self.table, self.transactions, self.s3 = _load_api()
 
-    def test_claim_photo_moves_pending_object_to_claimed_prefix(self):
+    def test_claim_photo_copies_pending_object_to_claimed_prefix_without_deleting(self):
         claimed = self.api._claim_photo("pending/user-1/abc123.jpg")
 
         self.assertEqual(claimed, "claimed/user-1/abc123.jpg")
@@ -144,9 +144,7 @@ class ClaimPendingPhotoTests(unittest.TestCase):
             CopySource={"Bucket": "private-photos", "Key": "pending/user-1/abc123.jpg"},
             Key="claimed/user-1/abc123.jpg",
         )
-        self.s3.delete_object.assert_called_once_with(
-            Bucket="private-photos", Key="pending/user-1/abc123.jpg"
-        )
+        self.s3.delete_object.assert_not_called()
 
     def test_claim_photo_on_already_claimed_key_is_a_no_op(self):
         claimed = self.api._claim_photo("claimed/user-1/abc123.jpg")
@@ -190,6 +188,131 @@ class ClaimPendingPhotoTests(unittest.TestCase):
         )
         saved_item = self.table.put_item.call_args.kwargs["Item"]
         self.assertEqual(saved_item["imageKey"], "claimed/user-1/new.jpg")
+
+    def _create_event(self, **overrides):
+        return {"body": json.dumps({**ASSET, "imageKey": "pending/user-1/abc123.jpg", **overrides})}
+
+    def _update_setup(self, existing_tag="TAG-0001"):
+        existing = {
+            **ASSET, "assetTag": existing_tag, "assetId": "AST-OWN",
+            "PK": "ASSET#AST-OWN", "SK": "METADATA", "imageKey": "claimed/user-1/old.jpg",
+        }
+        self.table.get_item.return_value = {"Item": existing}
+
+    def test_create_releases_pending_photo_after_asset_is_saved(self):
+        self.table.scan.return_value = {"Items": []}
+
+        result = self.api._create(self._create_event(), {"sub": "admin"}, {"Administrator"})
+
+        self.assertEqual(result["statusCode"], 201)
+        self.s3.delete_object.assert_called_once_with(
+            Bucket="private-photos", Key="pending/user-1/abc123.jpg"
+        )
+
+    def test_create_duplicate_tag_keeps_pending_photo_and_retry_succeeds(self):
+        self.table.scan.return_value = {"Items": [{"assetId": "AST-EXISTING", "assetTag": "tag-0001"}]}
+
+        conflict = self.api._create(self._create_event(), {"sub": "admin"}, {"Administrator"})
+
+        self.assertEqual(conflict["statusCode"], 409)
+        self.s3.delete_object.assert_not_called()
+
+        self.table.scan.return_value = {"Items": []}
+        retry = self.api._create(
+            self._create_event(assetTag="TAG-0002"), {"sub": "admin"}, {"Administrator"}
+        )
+
+        self.assertEqual(retry["statusCode"], 201)
+        self.assertEqual(self.s3.copy_object.call_count, 2)
+        self.s3.delete_object.assert_called_once_with(
+            Bucket="private-photos", Key="pending/user-1/abc123.jpg"
+        )
+
+    def test_create_failed_write_keeps_pending_photo_and_retry_succeeds(self):
+        self.table.scan.return_value = {"Items": []}
+        self.transactions.transact_write_items.side_effect = [
+            _ClientError({"Error": {"Code": "InternalServerError"}}),
+            {},
+        ]
+
+        with self.assertRaises(_ClientError):
+            self.api._create(self._create_event(), {"sub": "admin"}, {"Administrator"})
+        self.s3.delete_object.assert_not_called()
+
+        retry = self.api._create(self._create_event(), {"sub": "admin"}, {"Administrator"})
+
+        self.assertEqual(retry["statusCode"], 201)
+        self.assertEqual(self.s3.copy_object.call_count, 2)
+        self.s3.delete_object.assert_called_once_with(
+            Bucket="private-photos", Key="pending/user-1/abc123.jpg"
+        )
+
+    def test_create_succeeds_when_pending_cleanup_fails(self):
+        self.table.scan.return_value = {"Items": []}
+        self.s3.delete_object.side_effect = _ClientError({"Error": {"Code": "AccessDenied"}})
+
+        result = self.api._create(self._create_event(), {"sub": "admin"}, {"Administrator"})
+
+        self.assertEqual(result["statusCode"], 201)
+
+    def test_update_releases_pending_photo_after_asset_is_saved(self):
+        self._update_setup()
+        event = {"body": json.dumps({"imageKey": "pending/user-1/new.jpg"})}
+
+        result = self.api._update(event, "AST-OWN", {"sub": "admin"}, {"Administrator"})
+
+        self.assertEqual(result["statusCode"], 200)
+        self.s3.delete_object.assert_called_once_with(
+            Bucket="private-photos", Key="pending/user-1/new.jpg"
+        )
+
+    def test_update_duplicate_tag_keeps_pending_photo_and_retry_succeeds(self):
+        self._update_setup()
+        self.table.scan.return_value = {"Items": [{"assetId": "AST-OTHER", "assetTag": "TAG-0002"}]}
+        event = {"body": json.dumps({"assetTag": "TAG-0002", "imageKey": "pending/user-1/new.jpg"})}
+
+        conflict = self.api._update(event, "AST-OWN", {"sub": "admin"}, {"Administrator"})
+
+        self.assertEqual(conflict["statusCode"], 409)
+        self.s3.delete_object.assert_not_called()
+
+        retry_event = {"body": json.dumps({"imageKey": "pending/user-1/new.jpg"})}
+        retry = self.api._update(retry_event, "AST-OWN", {"sub": "admin"}, {"Administrator"})
+
+        self.assertEqual(retry["statusCode"], 200)
+        self.assertEqual(self.s3.copy_object.call_count, 2)
+        self.s3.delete_object.assert_called_once_with(
+            Bucket="private-photos", Key="pending/user-1/new.jpg"
+        )
+
+    def test_update_failed_write_keeps_pending_photo_and_retry_succeeds(self):
+        self._update_setup()
+        self.table.meta.client.exceptions.ConditionalCheckFailedException = type(
+            "ConditionalCheckFailedException", (Exception,), {}
+        )
+        self.table.put_item.side_effect = [RuntimeError("write failed"), {}]
+        event = {"body": json.dumps({"imageKey": "pending/user-1/new.jpg"})}
+
+        with self.assertRaises(RuntimeError):
+            self.api._update(event, "AST-OWN", {"sub": "admin"}, {"Administrator"})
+        self.s3.delete_object.assert_not_called()
+
+        retry = self.api._update(event, "AST-OWN", {"sub": "admin"}, {"Administrator"})
+
+        self.assertEqual(retry["statusCode"], 200)
+        self.assertEqual(self.s3.copy_object.call_count, 2)
+        self.s3.delete_object.assert_called_once_with(
+            Bucket="private-photos", Key="pending/user-1/new.jpg"
+        )
+
+    def test_update_succeeds_when_pending_cleanup_fails(self):
+        self._update_setup()
+        self.s3.delete_object.side_effect = _ClientError({"Error": {"Code": "AccessDenied"}})
+        event = {"body": json.dumps({"imageKey": "pending/user-1/new.jpg"})}
+
+        result = self.api._update(event, "AST-OWN", {"sub": "admin"}, {"Administrator"})
+
+        self.assertEqual(result["statusCode"], 200)
 
     def test_update_without_imagekey_change_does_not_touch_s3(self):
         existing = {
