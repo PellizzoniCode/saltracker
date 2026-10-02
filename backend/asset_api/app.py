@@ -35,6 +35,7 @@ SERIALIZER = TypeSerializer()
 MAINTENANCE_PREFIX = "MAINTENANCE#"
 MAINTENANCE_COLLECTION = "/assets/{assetId}/maintenance"
 MAINTENANCE_ITEM = "/assets/{assetId}/maintenance/{maintenanceId}"
+MAINTENANCE_ID_INDEX = "MaintenanceIdIndex"
 
 
 def response(status_code, body):
@@ -458,7 +459,30 @@ def _load_asset_for(asset_id, claims, groups):
 
 
 def _find_maintenance(asset_id, maintenance_id):
-    """The sort key embeds the date, so look the record up by ID within the asset partition."""
+    """Locate a record by ID without reading the asset's whole history.
+
+    The sort key embeds the date, so MaintenanceIdIndex maps the ID to the item key
+    and the item is then read with a strongly consistent GetItem. The index is
+    eventually consistent: a record created or re-dated moments ago may be missing
+    or point at its old key, so a miss falls back to searching the asset partition.
+    """
+    keys = TABLE.query(
+        IndexName=MAINTENANCE_ID_INDEX,
+        KeyConditionExpression=Key("maintenanceId").eq(maintenance_id),
+    ).get("Items", [])
+
+    for key in keys:
+        # IDs are only unique in practice; never follow one into another asset's partition.
+        if key.get("PK") != f"ASSET#{asset_id}":
+            continue
+        item = TABLE.get_item(Key={"PK": key["PK"], "SK": key["SK"]}, ConsistentRead=True).get("Item")
+        if item and item.get("maintenanceId") == maintenance_id:
+            return item
+
+    return _search_maintenance_partition(asset_id, maintenance_id)
+
+
+def _search_maintenance_partition(asset_id, maintenance_id):
     params = {
         "KeyConditionExpression": _maintenance_partition(asset_id),
         "FilterExpression": Attr("maintenanceId").eq(maintenance_id),

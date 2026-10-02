@@ -105,6 +105,31 @@ TECHNICIAN = ({"sub": "tech-1", "custom:department": "IT"}, {"Technician"})
 ADMIN = ({"sub": "admin-1"}, {"Administrator"})
 
 
+def _use_store(table, *items, index_keys=None):
+    """Answer get_item by key and query like the table and MaintenanceIdIndex would.
+
+    index_keys overrides what the index returns, to model its eventual consistency.
+    """
+    by_key = {(item["PK"], item["SK"]): item for item in items}
+    records = [item for item in items if item["SK"].startswith("MAINTENANCE#")]
+
+    def get_item(Key, **_):
+        item = by_key.get((Key["PK"], Key["SK"]))
+        return {"Item": dict(item)} if item else {}
+
+    def query(**request):
+        if request.get("IndexName") == "MaintenanceIdIndex":
+            keys = index_keys if index_keys is not None else records
+            return {"Items": [
+                {"PK": key["PK"], "SK": key["SK"], "maintenanceId": key["maintenanceId"]} for key in keys
+            ]}
+        # Every handler under test queries the AST-0001 partition.
+        return {"Items": [dict(item) for item in records if item["PK"] == ASSET["PK"]]}
+
+    table.get_item.side_effect = get_item
+    table.query.side_effect = query
+
+
 def _event(body=None, query=None):
     return {"body": json.dumps(body) if body is not None else None, "queryStringParameters": query}
 
@@ -268,11 +293,57 @@ class MaintenanceReadTests(unittest.TestCase):
         self.assertEqual(result["statusCode"], 404)
 
 
+class MaintenanceLookupTests(unittest.TestCase):
+    def setUp(self):
+        self.api, self.table, _ = _load_api()
+
+    def _query_indexes(self):
+        return [call.kwargs.get("IndexName") for call in self.table.query.call_args_list]
+
+    def test_lookup_uses_index_then_consistent_get(self):
+        _use_store(self.table, ASSET, RECORD)
+
+        result = self.api._get_maintenance("AST-0001", "MNT-0001", *ADMIN)
+
+        self.assertEqual(result["statusCode"], 200)
+        self.assertEqual(self._query_indexes(), ["MaintenanceIdIndex"])
+        record_get = self.table.get_item.call_args_list[-1].kwargs
+        self.assertEqual(record_get["Key"], {"PK": RECORD["PK"], "SK": RECORD["SK"]})
+        self.assertTrue(record_get["ConsistentRead"])
+
+    def test_index_miss_falls_back_to_partition(self):
+        _use_store(self.table, ASSET, RECORD, index_keys=[])
+
+        result = self.api._get_maintenance("AST-0001", "MNT-0001", *ADMIN)
+
+        self.assertEqual(result["statusCode"], 200)
+        self.assertEqual(self._query_indexes(), ["MaintenanceIdIndex", None])
+
+    def test_stale_index_key_falls_back_to_partition(self):
+        stale = {**RECORD, "SK": "MAINTENANCE#2026-01-01#MNT-0001"}
+        _use_store(self.table, ASSET, RECORD, index_keys=[stale])
+
+        result = self.api._get_maintenance("AST-0001", "MNT-0001", *ADMIN)
+
+        self.assertEqual(result["statusCode"], 200)
+        self.assertEqual(json.loads(result["body"])["performedDate"], RECORD["performedDate"])
+        self.assertEqual(self._query_indexes(), ["MaintenanceIdIndex", None])
+
+    def test_index_entry_from_another_asset_is_not_followed(self):
+        other = {**RECORD, "PK": "ASSET#AST-9999", "assetId": "AST-9999"}
+        _use_store(self.table, ASSET, other)
+
+        result = self.api._get_maintenance("AST-0001", "MNT-0001", *ADMIN)
+
+        self.assertEqual(result["statusCode"], 404)
+        followed = [call.kwargs["Key"]["PK"] for call in self.table.get_item.call_args_list]
+        self.assertNotIn("ASSET#AST-9999", followed)
+
+
 class MaintenanceManageTests(unittest.TestCase):
     def setUp(self):
         self.api, self.table, self.transactions = _load_api()
-        self.table.get_item.return_value = {"Item": dict(ASSET)}
-        self.table.query.return_value = {"Items": [dict(RECORD)]}
+        _use_store(self.table, ASSET, RECORD)
 
     def test_technician_cannot_update_or_delete(self):
         update = self.api._update_maintenance(_event({"notes": "x"}), "AST-0001", "MNT-0001", *TECHNICIAN)
@@ -284,9 +355,7 @@ class MaintenanceManageTests(unittest.TestCase):
         self.table.delete_item.assert_not_called()
 
     def test_admin_update_keeps_original_performer(self):
-        self.table.get_item.return_value = {"Item": {
-            **ASSET, "lastMaintenanceDate": "2026-09-01", "lastCleaningDate": "2026-09-01",
-        }}
+        _use_store(self.table, {**ASSET, "lastMaintenanceDate": "2026-09-01", "lastCleaningDate": "2026-09-01"}, RECORD)
 
         result = self.api._update_maintenance(_event({"notes": "Updated"}), "AST-0001", "MNT-0001", *ADMIN)
 
@@ -337,7 +406,7 @@ class MaintenanceManageTests(unittest.TestCase):
         )
 
     def test_delete_unknown_record_returns_not_found(self):
-        self.table.query.return_value = {"Items": []}
+        _use_store(self.table, ASSET)
 
         result = self.api._delete_maintenance("AST-0001", "MNT-9999", *ADMIN)
 
@@ -348,8 +417,7 @@ class MaintenanceManageTests(unittest.TestCase):
 class MaintenanceRoutingTests(unittest.TestCase):
     def setUp(self):
         self.api, self.table, _ = _load_api()
-        self.table.get_item.return_value = {"Item": dict(ASSET)}
-        self.table.query.return_value = {"Items": [dict(RECORD)]}
+        _use_store(self.table, ASSET, RECORD)
 
     def _event(self, method, resource, maintenance_id=None):
         path = {"assetId": "AST-0001"}

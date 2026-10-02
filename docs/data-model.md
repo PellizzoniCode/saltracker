@@ -33,7 +33,7 @@ Maintenance events share the asset's partition, so an asset's full service histo
 |---|---|
 | List an asset's history (newest first) | `Query` on `PK = ASSET#<assetId>` and `begins_with(SK, "MAINTENANCE#")` with `ScanIndexForward = false`, paginated by `nextToken` |
 | Record maintenance | `TransactWriteItems`: conditional `Put` of the maintenance item, plus an `Update` moving the asset's `lastMaintenanceDate` (and `lastCleaningDate` for `Cleaning`) forward when the new date is later |
-| View or find one record | `Query` on the asset partition filtered by `maintenanceId` (the date is part of the sort key) |
+| View or find one record | `Query` on `MaintenanceIdIndex` for the item key, then a strongly consistent `GetItem`; falls back to a `Query` on the asset partition filtered by `maintenanceId` when the index has no matching entry yet |
 | Correct a record (Administrator) | Conditional `Put`; when `performedDate` changes, `Delete` the old item and `Put` the new key in one transaction |
 | Delete a record (Administrator) | Conditional `DeleteItem` |
 
@@ -65,6 +65,7 @@ Example item:
 |---|---|---|
 | `AssignedUserIndex` | `assignedUserId` | Find assets assigned to a particular employee |
 | `DepartmentIndex` | `department` | Find assets belonging to a particular department |
+| `MaintenanceIdIndex` | `maintenanceId` | Find a maintenance record's key by ID (keys-only, sparse: only maintenance items carry `maintenanceId`) |
 
 DynamoDB returns results in pages. When more results are available, the API returns a `nextToken`, which the frontend can use to load the next page.
 
@@ -72,3 +73,4 @@ Optional index fields that are empty or unknown are omitted from the DynamoDB it
 
 Financial values are stored as DynamoDB numbers created from Python `Decimal`. Unknown optional data is stored as `null`, never guessed.
 
+`MaintenanceIdIndex` is eventually consistent. A record created or re-dated moments ago may be missing from it, or still listed under its old key, so the API reads the item itself from the table and searches the asset partition when the index has no matching entry. An index entry that belongs to a different asset is never followed.

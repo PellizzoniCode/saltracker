@@ -41,6 +41,8 @@ Resources:
           AttributeType: S
         - AttributeName: department
           AttributeType: S
+        - AttributeName: maintenanceId
+          AttributeType: S
       KeySchema:
         - AttributeName: PK
           KeyType: HASH
@@ -59,6 +61,14 @@ Resources:
               KeyType: HASH
           Projection:
             ProjectionType: ALL
+        # Sparse: only maintenance items carry maintenanceId. Keys only, because the
+        # API re-reads the item from the table with a strongly consistent GetItem.
+        - IndexName: MaintenanceIdIndex
+          KeySchema:
+            - AttributeName: maintenanceId
+              KeyType: HASH
+          Projection:
+            ProjectionType: KEYS_ONLY
 
   AssetPhotoBucket:
     Type: AWS::S3::Bucket
