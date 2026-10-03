@@ -32,3 +32,26 @@ flowchart TD
 
 SailPoint is the governance control plane. Cognito remains the authentication and token service required by the application. A later machine-to-machine provisioning API will expose narrowly scoped operations for aggregation, account enable/disable, and group membership. Its Lambda execution role will be limited to the required Cognito administrative APIs.
 
+
+## IAM least privilege
+
+Every Lambda has its own execution role defined inline in `infrastructure/template.yaml`. Each role is granted only the actions its handler calls, scoped to specific resources. The daily maintenance check (EventBridge schedule) and the maintenance SNS topic are template-managed. Neither needs a manual post-deploy step.
+
+| Function | Actions | Resources |
+|---|---|---|
+| `AssetApiFunction` | `dynamodb:GetItem`, `PutItem`, `DeleteItem`, `Scan`, `Query`, `TransactWriteItems` | Asset table |
+| | `dynamodb:Query` | Asset table indexes (`DepartmentIndex`, `AssignedUserIndex`) |
+| | `s3:GetObject` (presigned photo URLs) | Photo bucket `pending/*`, `assets/*` |
+| | `bedrock:InvokeModel` | Nova Lite inference profile, plus its foundation models when called through that profile |
+| `PhotoUploadFunction` | `s3:PutObject` (presigned POST) | Photo bucket `pending/*` |
+| `PhotoAnalysisFunction` | `s3:GetObject` | Photo bucket `pending/*` |
+| | `dynamodb:PutItem`, `UpdateItem` | Asset table |
+| | `bedrock:InvokeModel` | Nova Lite inference profile, plus its foundation models when called through that profile |
+| `PhotoAnalysisApiFunction` | `dynamodb:GetItem` | Asset table |
+| `MaintenanceSchedulerFunction` | `dynamodb:Scan`, `Query` | Asset table |
+| | `sns:Publish` | Maintenance notification topic |
+| `HealthFunction` | none | none |
+
+`PhotoAnalysisFunction` builds the bucket ARN from the bucket name instead of using `!GetAtt`. The bucket's S3 event notification already depends on the function, so `!GetAtt` would create a circular dependency.
+
+The photo bucket and the maintenance topic both deny requests that are not made over TLS. The maintenance topic is also encrypted with the AWS-managed SNS key.
