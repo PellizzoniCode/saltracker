@@ -63,6 +63,8 @@ function MaintenancePage({
     useState(false);
   const [maintenanceMessage, setMaintenanceMessage] =
     useState("");
+  const [editingMaintenanceId, setEditingMaintenanceId] =
+    useState(null);
 
   const loadMaintenance = useCallback(async () => {
     setLoading(true);
@@ -97,6 +99,62 @@ function MaintenancePage({
     }));
   }
 
+  function maintenancePath(maintenanceId) {
+    const base = `/assets/${encodeURIComponent(
+      asset.assetId
+    )}/maintenance`;
+
+    return maintenanceId
+      ? `${base}/${encodeURIComponent(maintenanceId)}`
+      : base;
+  }
+
+  function editMaintenance(item) {
+    setEditingMaintenanceId(item.maintenanceId);
+    setMaintenanceForm(
+      Object.fromEntries(
+        Object.keys(emptyMaintenance).map((key) => [
+          key,
+          item[key] ?? "",
+        ])
+      )
+    );
+    setMaintenanceMessage("");
+  }
+
+  function cancelEditMaintenance() {
+    setEditingMaintenanceId(null);
+    setMaintenanceForm(emptyMaintenance);
+  }
+
+  async function deleteMaintenance(item) {
+    if (
+      !window.confirm(
+        `Delete the ${item.maintenanceType} record from ${item.performedDate}?`
+      )
+    ) {
+      return;
+    }
+
+    setMaintenanceMessage("");
+
+    try {
+      const result = await api(
+        maintenancePath(item.maintenanceId),
+        { method: "DELETE" }
+      );
+
+      if (editingMaintenanceId === item.maintenanceId) {
+        cancelEditMaintenance();
+      }
+
+      setMaintenanceMessage(result.message);
+      await loadMaintenance();
+    } catch (error) {
+      setMaintenanceMessage(error.message);
+    }
+  }
+
   async function recordMaintenance(event) {
     event.preventDefault();
 
@@ -116,17 +174,16 @@ function MaintenancePage({
       );
 
       const result = await api(
-        `/assets/${encodeURIComponent(
-          asset.assetId
-        )}/maintenance`,
+        maintenancePath(editingMaintenanceId),
         {
-          method: "POST",
+          method: editingMaintenanceId ? "PUT" : "POST",
           body: JSON.stringify(payload),
         }
       );
 
       setMaintenanceMessage(result.message);
       setMaintenanceForm(emptyMaintenance);
+      setEditingMaintenanceId(null);
       setAiRecommendation(null);
       await loadMaintenance();
     } catch (error) {
@@ -358,7 +415,11 @@ function MaintenancePage({
       </section>
 
       <section className="panel">
-        <h2>Record maintenance</h2>
+        <h2>
+          {editingMaintenanceId
+            ? `Edit maintenance ${editingMaintenanceId}`
+            : "Record maintenance"}
+        </h2>
 
         <form
           className="maintenance-form"
@@ -447,8 +508,21 @@ function MaintenancePage({
           >
             {savingMaintenance
               ? "Saving..."
-              : "Record maintenance"}
+              : editingMaintenanceId
+                ? "Save changes"
+                : "Record maintenance"}
           </button>
+
+          {editingMaintenanceId && (
+            <button
+              type="button"
+              className="secondary"
+              onClick={cancelEditMaintenance}
+              disabled={savingMaintenance}
+            >
+              Cancel
+            </button>
+          )}
         </form>
       </section>
 
@@ -477,6 +551,7 @@ function MaintenancePage({
                 <th>Next maintenance</th>
                 <th>Cost</th>
                 <th>Performed by</th>
+                <th>Actions</th>
               </tr>
             </thead>
 
@@ -505,11 +580,27 @@ function MaintenancePage({
                         item.performedBy ||
                         "—"}
                     </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="secondary table-action"
+                        onClick={() => editMaintenance(item)}
+                      >
+                        Edit
+                      </button>{" "}
+                      <button
+                        type="button"
+                        className="secondary table-action"
+                        onClick={() => deleteMaintenance(item)}
+                      >
+                        Delete
+                      </button>
+                    </td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan="7">
+                  <td colSpan="8">
                     {loading
                       ? "Loading maintenance history..."
                       : "No maintenance history has been recorded."}

@@ -25,6 +25,19 @@ Week 1 uses asset metadata records. The shared partition leaves room for mainten
 | Manager and Technician listing | `Query` on `DepartmentIndex` using the Cognito `custom:department` claim |
 | Continue a large result set | Return and accept an encoded `nextToken` |
 
+## Maintenance access patterns
+
+| Access pattern | Implementation |
+|---|---|
+| Record maintenance | Conditional `PutItem` with SK `MAINTENANCE#<performedDate>#<maintenanceId>` |
+| List an asset's history | `Query` on `PK` with `begins_with(SK, "MAINTENANCE#")`, newest first |
+| Find one record | Same `Query` filtered on `maintenanceId` (the SK embeds the date) |
+| Edit, same performed date | Conditional `PutItem` on the existing key |
+| Edit, new performed date | `TransactWriteItems`: put the new key and delete the old key together |
+| Delete | Conditional `DeleteItem` (Administrator only) |
+
+`performedBy`, `performedByEmail`, and `createdAt` are set from the authenticated Cognito identity when the record is created and are never taken from the request body, including on edits. Edits add `updatedBy` and `updatedAt`.
+
 ## Global secondary indexes
 
 | Index | Partition key | Purpose |

@@ -34,6 +34,17 @@ MAINTENANCE = {
     "cost": "125.00",
 }
 
+RECORD = {
+    "PK": "ASSET#AST-TEST",
+    "SK": "MAINTENANCE#2026-10-01#MNT-12345678",
+    "maintenanceId": "MNT-12345678",
+    "assetId": "AST-TEST",
+    **MAINTENANCE,
+    "performedBy": "technician-1",
+    "performedByEmail": "technician-1@example.com",
+    "createdAt": "2026-10-01T12:00:00+00:00",
+}
+
 
 class MaintenanceApiTests(unittest.TestCase):
     def setUp(self):
@@ -373,6 +384,190 @@ class MaintenanceApiTests(unittest.TestCase):
             "Invalid model response",
             body["message"],
         )
+
+    def test_create_uses_performed_date_in_sort_key(self):
+        self.api.lambda_handler(self.event(), None)
+
+        stored_item = self.table.put_item.call_args.kwargs["Item"]
+
+        self.assertTrue(
+            stored_item["SK"].startswith("MAINTENANCE#2026-10-01#MNT-")
+        )
+
+
+class MaintenanceRecordChangeTests(unittest.TestCase):
+    def setUp(self):
+        self.api, self.table, self.transactions = _load_api()
+        self.table.get_item.return_value = {"Item": ASSET}
+        self.table.query.return_value = {"Items": [dict(RECORD)]}
+
+    def event(
+        self,
+        method="PUT",
+        payload=None,
+        group="Administrator",
+        sub="user-1",
+        department="IT",
+    ):
+        event = {
+            "httpMethod": method,
+            "resource": "/assets/{assetId}/maintenance/{maintenanceId}",
+            "pathParameters": {
+                "assetId": "AST-TEST",
+                "maintenanceId": "MNT-12345678",
+            },
+            "requestContext": {
+                "authorizer": {
+                    "claims": {
+                        "sub": sub,
+                        "email": f"{sub}@example.com",
+                        "cognito:groups": f"[{group}]",
+                        "custom:department": department,
+                    }
+                }
+            },
+        }
+
+        if method == "PUT":
+            event["body"] = json.dumps(payload or MAINTENANCE)
+
+        return event
+
+    def test_administrator_can_update_record_on_same_date(self):
+        result = self.api.lambda_handler(self.event(), None)
+
+        self.assertEqual(result["statusCode"], 200)
+        stored_item = self.table.put_item.call_args.kwargs["Item"]
+        self.assertEqual(stored_item["SK"], RECORD["SK"])
+        self.assertEqual(stored_item["updatedBy"], "user-1")
+        self.transactions.transact_write_items.assert_not_called()
+
+    def test_new_performed_date_moves_record_atomically(self):
+        payload = {**MAINTENANCE, "performedDate": "2026-10-02"}
+
+        result = self.api.lambda_handler(
+            self.event(payload=payload),
+            None,
+        )
+
+        self.assertEqual(result["statusCode"], 200)
+        self.table.put_item.assert_not_called()
+        writes = self.transactions.transact_write_items.call_args.kwargs[
+            "TransactItems"
+        ]
+        self.assertEqual(
+            writes[0]["Put"]["Item"]["SK"],
+            {"S": "MAINTENANCE#2026-10-02#MNT-12345678"},
+        )
+        self.assertEqual(
+            writes[1]["Delete"]["Key"]["SK"],
+            {"S": RECORD["SK"]},
+        )
+
+    def test_update_keeps_original_identity_fields(self):
+        payload = {
+            **MAINTENANCE,
+            "performedBy": "browser-supplied-user",
+            "maintenanceId": "MNT-OTHER",
+            "createdAt": "2000-01-01",
+        }
+
+        self.api.lambda_handler(self.event(payload=payload), None)
+
+        stored_item = self.table.put_item.call_args.kwargs["Item"]
+        self.assertEqual(stored_item["performedBy"], "technician-1")
+        self.assertEqual(stored_item["maintenanceId"], "MNT-12345678")
+        self.assertEqual(stored_item["createdAt"], RECORD["createdAt"])
+
+    def test_technician_can_update_own_record(self):
+        result = self.api.lambda_handler(
+            self.event(group="Technician", sub="technician-1"),
+            None,
+        )
+
+        self.assertEqual(result["statusCode"], 200)
+
+    def test_technician_cannot_update_another_users_record(self):
+        result = self.api.lambda_handler(
+            self.event(group="Technician", sub="technician-2"),
+            None,
+        )
+
+        self.assertEqual(result["statusCode"], 403)
+        self.table.put_item.assert_not_called()
+
+    def test_other_department_technician_cannot_update(self):
+        result = self.api.lambda_handler(
+            self.event(
+                group="Technician",
+                sub="technician-1",
+                department="Finance",
+            ),
+            None,
+        )
+
+        self.assertEqual(result["statusCode"], 403)
+        self.table.put_item.assert_not_called()
+
+    def test_read_only_roles_cannot_update(self):
+        for group in ("Employee", "Manager", "Auditor"):
+            result = self.api.lambda_handler(
+                self.event(group=group, sub="employee-1"),
+                None,
+            )
+
+            self.assertEqual(result["statusCode"], 403)
+
+        self.table.put_item.assert_not_called()
+
+    def test_invalid_update_returns_400(self):
+        result = self.api.lambda_handler(
+            self.event(payload={"maintenanceType": "Unknown"}),
+            None,
+        )
+
+        self.assertEqual(result["statusCode"], 400)
+        self.table.put_item.assert_not_called()
+
+    def test_missing_record_returns_404(self):
+        self.table.query.return_value = {"Items": []}
+
+        for method in ("PUT", "DELETE"):
+            result = self.api.lambda_handler(
+                self.event(method=method),
+                None,
+            )
+
+            self.assertEqual(result["statusCode"], 404)
+
+        self.table.put_item.assert_not_called()
+        self.table.delete_item.assert_not_called()
+
+    def test_administrator_can_delete_record(self):
+        result = self.api.lambda_handler(
+            self.event(method="DELETE"),
+            None,
+        )
+
+        self.assertEqual(result["statusCode"], 200)
+        self.table.delete_item.assert_called_once()
+        self.assertEqual(
+            self.table.delete_item.call_args.kwargs["Key"],
+            {"PK": RECORD["PK"], "SK": RECORD["SK"]},
+        )
+
+    def test_technician_cannot_delete_record(self):
+        result = self.api.lambda_handler(
+            self.event(
+                method="DELETE",
+                group="Technician",
+                sub="technician-1",
+            ),
+            None,
+        )
+
+        self.assertEqual(result["statusCode"], 403)
+        self.table.delete_item.assert_not_called()
 
 
 if __name__ == "__main__":
