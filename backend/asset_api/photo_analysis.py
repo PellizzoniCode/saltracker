@@ -35,34 +35,77 @@ PHOTO_KEY_PATTERN = re.compile(
 )
 
 PROMPT = """
-Analyze only what is visible in this asset photograph.
+Analyze the primary physical asset visible in this photograph.
 
-Return only a valid JSON object with these fields:
+Return only one valid JSON object with exactly these fields:
 
 {
   "category": "string",
+  "manufacturer": null,
+  "model": null,
   "description": "string",
   "condition": "Good, Fair, Poor, or Unknown",
-  "manufacturer": "string",
-  "model": "string",
-  "usefulLifeMonths": 48,
-  "maintenanceCategory": "string",
-  "reviewStatus": "NeedsReview or NeedsManualEntry"
+  "usefulLifeMonths": null,
+  "estimatedValueUsd": null,
+  "estimatedProductionDate": null,
+  "maintenanceCategory": "string"
 }
 
-Rules:
+Allowed asset categories:
+
+- Laptop
+- Desktop Computer
+- Monitor
+- Printer
+- Network Equipment
+- Server
+- Storage Device
+- Mobile Device
+- Peripheral
+- Office Equipment
+- Other
+
+Allowed maintenance categories:
+
+- End-User Computing
+- Display Equipment
+- Print Services
+- Network Infrastructure
+- Server Infrastructure
+- Storage Infrastructure
+- Mobile Device Support
+- Peripheral Equipment
+- General Inspection
+
+Classification rules:
+
+- A portable computer with an integrated screen and keyboard is a Laptop.
+- A standalone computer display is a Monitor.
+- A printer, scanner, or multifunction printer is a Printer.
+- A switch, router, firewall, or access point is Network Equipment.
+- A rack-mounted or tower service computer is a Server.
+- A keyboard, mouse, dock, webcam, or headset is a Peripheral.
+
+Additional rules:
 
 - Do not invent information that cannot be verified from the photograph.
-- Do not provide serial numbers, exact model numbers, purchase values,
-  purchase dates, or employee assignments.
-- Only fill in "manufacturer" when a logo or label makes it clearly
-  visible; otherwise return an empty string.
-- Only fill in "model" with a general model family (never an exact model
-  number) when it can be confidently read from the photograph; otherwise
-  return an empty string.
-- Keep the description short.
-- If the asset cannot be identified, use NeedsManualEntry.
-- If the asset can be identified, use NeedsReview.
+- Set manufacturer only when a logo or label makes it clearly visible.
+  Otherwise return null.
+- Set model only when it is clearly visible or can be identified confidently
+  from distinctive physical characteristics. Otherwise return null.
+- Do not guess an exact model from general appearance alone.
+- Estimate usefulLifeMonths from the asset category, visible age, apparent
+  condition, and a typical enterprise lifecycle.
+- usefulLifeMonths must be an integer between 12 and 120.
+- Estimate estimatedValueUsd from the identified category, model when known,
+  visible age, and condition. Return a whole-number USD estimate between 1
+  and 100000. This is an indicative estimate, not a purchase price or appraisal.
+- Set estimatedProductionDate in YYYY-MM-DD format only when an exact date is
+  visible on the asset or its label. Otherwise return null.
+- Describe the asset in five to twelve words.
+- Base condition only on visible physical evidence; otherwise use Unknown.
+- Do not provide serial numbers, purchase values, purchase dates, ownership,
+  or employee assignments.
 - Return JSON only, without Markdown.
 """
 
@@ -101,8 +144,6 @@ def validate_suggestion(raw_text):
         "category",
         "description",
         "condition",
-        "manufacturer",
-        "model",
         "maintenanceCategory",
     ):
         value = result.get(field, "")
@@ -117,6 +158,20 @@ def validate_suggestion(raw_text):
 
         suggestion[field] = value
 
+    for field in ("manufacturer", "model"):
+        value = result.get(field)
+
+        if value is not None:
+            if not isinstance(value, str):
+                raise ValueError(f"{field} must be a string or null.")
+
+            value = value.strip() or None
+
+            if value and len(value) > 100:
+                raise ValueError(f"{field} is too long.")
+
+        suggestion[field] = value
+
     if suggestion["condition"] not in {
         "Good",
         "Fair",
@@ -128,28 +183,48 @@ def validate_suggestion(raw_text):
 
     useful_life = result.get("usefulLifeMonths")
 
-    if useful_life is not None:
-        if (
-            type(useful_life) is not int
-            or useful_life < 1
-            or useful_life > 600
-        ):
-            raise ValueError("Invalid useful life.")
+    if (
+        type(useful_life) is not int
+        or useful_life < 12
+        or useful_life > 120
+    ):
+        raise ValueError("Invalid estimated useful life.")
 
     suggestion["usefulLifeMonths"] = useful_life
 
-    review_status = result.get("reviewStatus")
+    estimated_value = result.get("estimatedValueUsd")
 
-    if review_status not in {
-        "NeedsReview",
-        "NeedsManualEntry",
-    }:
-        raise ValueError("Invalid review status.")
+    if (
+        type(estimated_value) is not int
+        or estimated_value < 1
+        or estimated_value > 100000
+    ):
+        raise ValueError("Invalid estimated USD value.")
+
+    suggestion["estimatedValueUsd"] = estimated_value
+
+    production_date = result.get("estimatedProductionDate")
+
+    if production_date is not None:
+        if not isinstance(production_date, str):
+            raise ValueError(
+                "estimatedProductionDate must be a string or null."
+            )
+
+        production_date = production_date.strip() or None
+
+        if production_date is not None:
+            try:
+                datetime.strptime(production_date, "%Y-%m-%d")
+            except ValueError as exc:
+                raise ValueError(
+                    "estimatedProductionDate must use YYYY-MM-DD."
+                ) from exc
+
+    suggestion["estimatedProductionDate"] = production_date
 
     if not suggestion["category"] or not suggestion["description"]:
-        review_status = "NeedsManualEntry"
-
-    suggestion["reviewStatus"] = review_status
+        raise ValueError("Category and description are required.")
 
     return suggestion
 

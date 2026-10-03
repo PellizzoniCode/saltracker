@@ -55,13 +55,14 @@ def load_handler():
 
 VALID_RESPONSE = {
     "category": "Laptop",
-    "description": "Black laptop with an integrated keyboard.",
-    "condition": "Good",
     "manufacturer": "Dell",
     "model": "Latitude",
+    "description": "Black laptop with an integrated keyboard.",
+    "condition": "Good",
     "usefulLifeMonths": 48,
-    "maintenanceCategory": "Electronics",
-    "reviewStatus": "NeedsReview",
+    "estimatedValueUsd": 650,
+    "estimatedProductionDate": None,
+    "maintenanceCategory": "End-User Computing",
 }
 
 
@@ -74,27 +75,37 @@ class ValidateSuggestionTests(unittest.TestCase):
         self.assertEqual(suggestion["category"], "Laptop")
         self.assertEqual(suggestion["manufacturer"], "Dell")
         self.assertEqual(suggestion["model"], "Latitude")
-        self.assertEqual(suggestion["reviewStatus"], "NeedsReview")
+        self.assertEqual(suggestion["estimatedValueUsd"], 650)
 
     def test_strips_markdown_code_fences(self):
         raw = "```json\n" + json.dumps(VALID_RESPONSE) + "\n```"
         suggestion = self.module.validate_suggestion(raw)
         self.assertEqual(suggestion["category"], "Laptop")
 
-    def test_missing_manufacturer_and_model_default_to_empty_string(self):
+    def test_missing_manufacturer_and_model_default_to_none(self):
         payload = dict(VALID_RESPONSE)
         del payload["manufacturer"]
         del payload["model"]
         suggestion = self.module.validate_suggestion(json.dumps(payload))
-        self.assertEqual(suggestion["manufacturer"], "")
-        self.assertEqual(suggestion["model"], "")
+        self.assertIsNone(suggestion["manufacturer"])
+        self.assertIsNone(suggestion["model"])
+
+    def test_blank_manufacturer_becomes_none(self):
+        payload = {**VALID_RESPONSE, "manufacturer": "   "}
+        suggestion = self.module.validate_suggestion(json.dumps(payload))
+        self.assertIsNone(suggestion["manufacturer"])
 
     def test_non_object_response_rejected(self):
         with self.assertRaises(ValueError):
             self.module.validate_suggestion(json.dumps([1, 2, 3]))
 
-    def test_non_string_field_rejected(self):
+    def test_non_string_manufacturer_rejected(self):
         payload = {**VALID_RESPONSE, "manufacturer": 123}
+        with self.assertRaises(ValueError):
+            self.module.validate_suggestion(json.dumps(payload))
+
+    def test_oversized_manufacturer_rejected(self):
+        payload = {**VALID_RESPONSE, "manufacturer": "x" * 101}
         with self.assertRaises(ValueError):
             self.module.validate_suggestion(json.dumps(payload))
 
@@ -118,20 +129,15 @@ class ValidateSuggestionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.module.validate_suggestion(json.dumps(payload))
 
-    def test_invalid_review_status_rejected(self):
-        payload = {**VALID_RESPONSE, "reviewStatus": "Unsure"}
+    def test_empty_category_rejected(self):
+        payload = {**VALID_RESPONSE, "category": ""}
         with self.assertRaises(ValueError):
             self.module.validate_suggestion(json.dumps(payload))
 
-    def test_empty_category_forces_manual_entry(self):
-        payload = {**VALID_RESPONSE, "category": ""}
-        suggestion = self.module.validate_suggestion(json.dumps(payload))
-        self.assertEqual(suggestion["reviewStatus"], "NeedsManualEntry")
-
-    def test_empty_description_forces_manual_entry(self):
+    def test_empty_description_rejected(self):
         payload = {**VALID_RESPONSE, "description": ""}
-        suggestion = self.module.validate_suggestion(json.dumps(payload))
-        self.assertEqual(suggestion["reviewStatus"], "NeedsManualEntry")
+        with self.assertRaises(ValueError):
+            self.module.validate_suggestion(json.dumps(payload))
 
 
 class ApiHandlerAccessControlTests(unittest.TestCase):

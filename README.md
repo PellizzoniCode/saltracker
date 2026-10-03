@@ -33,6 +33,56 @@ See [`docs/architecture/README.md`](docs/architecture/README.md) for the complet
 
 ## Test and deploy the backend
 
+The non-production helper is the quickest way to deploy a complete local testing stack:
+
+```bash
+bash scripts/dev.sh up
+ENVIRONMENT=test bash scripts/dev.sh up
+```
+
+`up` runs the backend tests, validates and builds SAM with `--cached --parallel`,
+deploys without prompts, writes `frontend/.env` from that stack's outputs, and
+loads the ten assets in `sample-data/assets.json`. When Python 3.11 is not
+available locally, the build uses Docker with `--use-container`. Install and
+configure the AWS CLI and SAM CLI first; Docker is needed for the container build.
+The default region is `us-east-1`; set `AWS_REGION` to use another region.
+`ENVIRONMENT=test` uses its own `smart-asset-tracker-test` stack, Cognito pool,
+API, table, Lambda functions, and photo bucket. The helper accepts only `dev` and
+`test`; use a non-production AWS account or profile.
+
+| Command | Purpose |
+| --- | --- |
+| `bash scripts/dev.sh test` | Run the backend unit tests |
+| `bash scripts/dev.sh build` | Validate and build the SAM template |
+| `bash scripts/dev.sh deploy` | Deploy the built template without prompts |
+| `bash scripts/dev.sh env` | Refresh `frontend/.env` from stack outputs |
+| `bash scripts/dev.sh seed` | Add sample assets through the deployed asset Lambda |
+| `bash scripts/dev.sh sync` | Run `sam sync --watch` for Lambda iteration |
+| `bash scripts/dev.sh web` | Run `npm ci` and start the Vite dev server |
+| `bash scripts/dev.sh down` | Delete the chosen stack |
+| `bash scripts/dev.sh down --purge` | Delete the stack and its retained DynamoDB table |
+
+`seed` invokes the deployed Lambda with synthetic Administrator claims. The
+Lambda still validates every asset and reserves each tag atomically; a repeat
+run treats HTTP 409 for existing tags as expected. These claims are for the
+direct Lambda invocation only and do not grant browser users Administrator access.
+
+For example, create a confirmed user in the selected stack:
+
+```bash
+bash scripts/dev.sh user -e ema@example.com -g Administrator
+bash scripts/dev.sh user -e tech@example.com -g Technician -d IT
+```
+
+The command prompts for a password without echoing it. You may pass `-p PASSWORD`
+for scripting, but the password can then appear in shell history and process
+arguments. Passwords must meet the Cognito pool policy (12 characters, uppercase,
+lowercase, number, and symbol). Groups are `Employee`, `Technician`, `Manager`,
+`Administrator`, and `Auditor`. A department is needed for department-scoped
+Technician and Manager access. Use `bash scripts/dev.sh help` for command help.
+
+To run each SAM step manually:
+
 ```bash
 python3 -m unittest discover -s backend/tests -v
 sam validate --template-file infrastructure/template.yaml
@@ -40,7 +90,8 @@ sam build --template-file infrastructure/template.yaml
 sam deploy --guided
 ```
 
-Use stack name `smart-asset-tracker-dev` and a development AWS region. After deployment, copy the stack outputs into `frontend/.env` using `frontend/.env.example`.
+Use stack name `smart-asset-tracker-dev` and a development AWS region. After
+manual deployment, run `bash scripts/dev.sh env` to configure the frontend.
 
 ### Tear down after testing
 
@@ -50,7 +101,9 @@ The stack has billable resources (DynamoDB, API Gateway, Cognito). Once you're d
 sam delete --stack-name smart-asset-tracker-dev
 ```
 
-`AssetTable` has `DeletionPolicy: Retain`, so the DynamoDB table survives the stack delete — remove it manually from the AWS Console/CLI if you don't need the data anymore.
+`AssetTable` and the photo S3 bucket have `DeletionPolicy: Retain`. The helper's
+`down --purge` deletes the retained table after deleting the stack; the retained
+photo bucket and its contents must be removed separately if no longer needed.
 
 ## Run the frontend
 
@@ -82,6 +135,65 @@ For employee record scoping, set each asset's `assignedUserId` to the user's Cog
 - Secrets and tokens must not be committed.
 - The current scan-based search is appropriate only for the small Week 1 dataset; production access patterns should use indexes.
 
-## Next milestone
+## Week 2: Secure Photo Intelligence
 
-Week 2 adds a private S3 bucket, presigned uploads, Bedrock image analysis with structured output, manual fallback, and mandatory human confirmation before saving AI suggestions.
+Week 2 expands the Smart Asset Lifecycle Tracker with secure asset-photo storage, Amazon Bedrock image analysis, and an authorized photo gallery.
+
+### Features completed
+
+- Private Amazon S3 bucket for asset photographs
+- S3 Block Public Access and server-side encryption
+- Five-minute presigned upload forms
+- JPEG and PNG validation with a 3.75 MB limit
+- Cognito role and department authorization
+- User-specific upload paths under `pending/{user-id}/`
+- S3-triggered asynchronous photo-analysis Lambda
+- Amazon Bedrock Nova Lite multimodal analysis
+- Structured and validated Bedrock JSON responses
+- Suggested asset category, model, description, condition, useful life, estimated production date, maintenance category, and estimated value
+- Manual approval before applying Bedrock suggestions
+- Secure photo gallery with short-lived image-access URLs
+- Backend authorization before every photo URL is generated
+- DynamoDB transactions for unique asset tags
+- CloudWatch logging and AWS X-Ray tracing
+- Realistic equipment photographs replacing placeholder records
+
+### Photo security
+
+Asset photographs are never publicly accessible.
+
+The backend generates a temporary image URL only after:
+
+1. API Gateway validates the Cognito token.
+2. Lambda reads the user identity and groups from verified Cognito claims.
+3. Lambda loads the asset record from DynamoDB.
+4. Lambda verifies the user’s role and access to that specific asset.
+5. Amazon S3 generates a short-lived presigned URL.
+
+Role, department, assignment, and ownership values supplied by the browser are not trusted.
+
+### Role-based photograph access
+
+- **Administrator:** access to all authorized asset photographs
+- **Auditor:** read-only access according to the application policy
+- **Manager:** photographs for assets in the manager’s department
+- **Technician:** photographs within the technician’s authorized scope
+- **Employee:** photographs for assets assigned to that employee
+- **Unauthenticated or unauthorized user:** receives a `401` or `403` response
+
+### Validation
+
+```bash
+python3 -m py_compile \
+  backend/asset_api/app.py \
+  backend/asset_api/domain.py \
+  backend/asset_api/photo_analysis.py
+
+python3 -m unittest discover -s backend/tests -v
+
+sam validate --template-file infrastructure/template.yaml
+sam build --template-file infrastructure/template.yaml
+
+cd frontend
+npm ci
+npm run build
