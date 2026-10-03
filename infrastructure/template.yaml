@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: AWS Smart Asset Lifecycle Tracker - Week 1 foundation
+Description: AWS Smart Asset Lifecycle Tracker - assets, photos, AI analysis and maintenance scheduling
 
 Parameters:
   Environment:
@@ -36,6 +36,24 @@ Resources:
     Properties:
       TopicName: !Sub smart-asset-maintenance-${Environment}
       DisplayName: Smart Asset Maintenance
+      KmsMasterKeyId: alias/aws/sns
+
+  MaintenanceNotificationTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref MaintenanceNotificationTopic
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: sns:Publish
+            Resource: !Ref MaintenanceNotificationTopic
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
 
   MaintenanceEmailSubscription:
     Type: AWS::SNS::Subscription
@@ -111,6 +129,25 @@ Resources:
               - http://localhost:5180
             AllowedHeaders: ['*']
             MaxAge: 300
+
+  AssetPhotoBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AssetPhotoBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt AssetPhotoBucket.Arn
+              - !Sub ${AssetPhotoBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
   UserPool:
     Type: AWS::Cognito::UserPool
     Properties:
@@ -242,9 +279,12 @@ Resources:
                 - dynamodb:Scan
                 - dynamodb:Query
                 - dynamodb:TransactWriteItems
-              Resource:
-                - !GetAtt AssetTable.Arn
-                - !Sub '${AssetTable.Arn}/index/*'
+              Resource: !GetAtt AssetTable.Arn
+            - Sid: QueryAssetIndexes
+              Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource: !Sub '${AssetTable.Arn}/index/*'
             - Sid: InvokeMaintenanceNovaLiteProfile
               Effect: Allow
               Action:
@@ -267,8 +307,8 @@ Resources:
               Action:
                 - s3:GetObject
               Resource:
-                - !Sub arn:${AWS::Partition}:s3:::${AWS::StackName}-photos-${AWS::AccountId}-${AWS::Region}/pending/*
-                - !Sub arn:${AWS::Partition}:s3:::${AWS::StackName}-photos-${AWS::AccountId}-${AWS::Region}/assets/*
+                - !Sub ${AssetPhotoBucket.Arn}/pending/*
+                - !Sub ${AssetPhotoBucket.Arn}/assets/*
       Events:
         CreateAsset:
           Type: Api
@@ -355,6 +395,8 @@ Resources:
         Variables:
           ASSET_PHOTO_BUCKET: !Sub ${AWS::StackName}-photos-${AWS::AccountId}-${AWS::Region}
           PHOTO_MODEL_ID: us.amazon.nova-lite-v1:0
+      # The bucket ARN is built from its name rather than !GetAtt because the
+      # bucket's S3 event notification already depends on this function.
       Policies:
         - Statement:
             - Sid: ReadPendingPhotos
@@ -456,6 +498,9 @@ Resources:
             Description: Daily asset maintenance and cleaning check
             Schedule: cron(0 13 * * ? *)
             Enabled: true
+            RetryPolicy:
+              MaximumRetryAttempts: 2
+              MaximumEventAgeInSeconds: 3600
   HealthFunction:
     Type: AWS::Serverless::Function
     Properties:
