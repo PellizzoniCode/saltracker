@@ -11,7 +11,7 @@ This estimate was prepared from these repository configuration files:
 | --- | --- |
 | Project | Smart Asset Lifecycle Tracker — Group 2 |
 | Submission requirement | Estimated monthly AWS cost; Issue #24 |
-| Prepared by | Mladen Mrkić |
+| Prepared by | Group 2 |
 | Document date | 3 October 2026 |
 | Calculator export date | 2 October 2026 |
 | Reviewed develop revision | `619ae93` |
