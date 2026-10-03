@@ -91,13 +91,14 @@ Saved estimate: [AWS Pricing Calculator — Group 2 development estimate](https:
 
 The latest JSON export also contains a separate snapshot URL: [export snapshot](https://calculator.aws/#/estimate?id=fba3992f9a8ce8392e8436d1ec6c9525d10f4cb1). The first link is the final share link supplied after the correction; the second records the JSON export's provenance.
 
-Supporting Calculator exports:
+Supporting Calculator exports and team guide:
 
 - [PDF cost estimate](cost-estimate/group2-aws-cost-estimate.pdf)
 - [JSON estimate parameters](cost-estimate/group2-aws-cost-estimate.json)
 - [CSV cost breakdown](cost-estimate/group2-aws-cost-estimate.csv)
+- [Word team guide](cost-estimate/group2-aws-pricing-team-guide.docx)
 
-The PDF records USD 3.25/month, USD 0.00 upfront, and USD 39.00 over 12 months. A separate Word guide explains the detailed team workflow and is available for sharing outside this repository.
+The PDF records USD 3.25/month, USD 0.00 upfront, and USD 39.00 over 12 months. The Word team guide explains the detailed estimation workflow and is included in this repository.
 
 ## Cost control and cleanup
 
