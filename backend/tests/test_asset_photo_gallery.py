@@ -84,6 +84,23 @@ class AssetPhotoGalleryTests(unittest.TestCase):
             ExpiresIn=300,
         )
 
+    def test_claimed_photo_uses_analysis_from_original_upload(self):
+        claimed = {**self.asset, "imageKey": "claimed/technician-1/photo.jpg"}
+        self.table.get_item.side_effect = [{"Item": claimed}, {"Item": self.analysis}]
+
+        result = self.call_photo({"sub": "admin-1"}, {"Administrator"})
+
+        self.assertEqual(result["statusCode"], 200)
+        self.s3.generate_presigned_url.assert_called_once_with(
+            "get_object",
+            Params={"Bucket": "private-photos", "Key": "claimed/technician-1/photo.jpg"},
+            ExpiresIn=300,
+        )
+        self.assertEqual(
+            self.table.get_item.call_args_list[1].kwargs["Key"],
+            {"PK": "PHOTO#pending/technician-1/photo.jpg", "SK": "ANALYSIS"},
+        )
+
     def test_manager_cannot_view_other_department_photo(self):
         self.table.get_item.return_value = {"Item": self.asset}
 
