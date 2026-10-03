@@ -8,6 +8,11 @@ Parameters:
     Default: dev
     AllowedValues: [dev, test, prod]
 
+  MaintenanceNotificationEmail:
+    Type: String
+    Default: ''
+    Description: Optional email address for maintenance alerts
+
 Globals:
   Function:
     Runtime: python3.11
@@ -19,8 +24,27 @@ Globals:
       Variables:
         ASSET_TABLE_NAME: !Ref AssetTable
         LOG_LEVEL: INFO
+Conditions:
+  HasMaintenanceNotificationEmail: !Not
+    - !Equals
+      - !Ref MaintenanceNotificationEmail
+      - ''
 
 Resources:
+  MaintenanceNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub smart-asset-maintenance-${Environment}
+      DisplayName: Smart Asset Maintenance
+
+  MaintenanceEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasMaintenanceNotificationEmail
+    Properties:
+      Protocol: email
+      Endpoint: !Ref MaintenanceNotificationEmail
+      TopicArn: !Ref MaintenanceNotificationTopic
+
   AssetTable:
     Type: AWS::DynamoDB::Table
     DeletionPolicy: Retain
@@ -183,14 +207,12 @@ Resources:
     Properties:
       FunctionName: !Sub smart-asset-api-${Environment}
       CodeUri: ../backend/asset_api/
-
       Handler: app.lambda_handler
-
       Timeout: 30
       Environment:
         Variables:
           MAINTENANCE_MODEL_ID: us.amazon.nova-lite-v1:0
-
+          ASSET_PHOTO_BUCKET: !Ref AssetPhotoBucket
       Policies:
         - Statement:
             - Sid: AssetTableReadWrite
@@ -220,7 +242,13 @@ Resources:
               Condition:
                 StringEquals:
                   bedrock:InferenceProfileArn: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.amazon.nova-lite-v1:0
-
+            - Sid: ReadAuthorizedAssetPhotos
+              Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource:
+                - !Sub arn:${AWS::Partition}:s3:::${AWS::StackName}-photos-${AWS::AccountId}-${AWS::Region}/pending/*
+                - !Sub arn:${AWS::Partition}:s3:::${AWS::StackName}-photos-${AWS::AccountId}-${AWS::Region}/assets/*
       Events:
         CreateAsset:
           Type: Api
@@ -239,6 +267,12 @@ Resources:
           Properties:
             RestApiId: !Ref AssetApi
             Path: /assets/{assetId}
+            Method: GET
+        GetAssetPhoto:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AssetApi
+            Path: /assets/{assetId}/photo
             Method: GET
         UpdateAsset:
           Type: Api
@@ -370,7 +404,38 @@ Resources:
             RestApiId: !Ref AssetApi
             Path: /photo-analysis
             Method: GET
+  MaintenanceSchedulerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub smart-asset-maintenance-scheduler-${Environment}
+      CodeUri: ../backend/asset_api/
+      Handler: maintenance_scheduler.lambda_handler
+      Timeout: 60
+      Environment:
+        Variables:
+          MAINTENANCE_TOPIC_ARN: !Ref MaintenanceNotificationTopic
+      Policies:
+        - Statement:
+            - Sid: ReadAssetsAndMaintenance
+              Effect: Allow
+              Action:
+                - dynamodb:Scan
+                - dynamodb:Query
+              Resource: !GetAtt AssetTable.Arn
 
+            - Sid: PublishMaintenanceNotifications
+              Effect: Allow
+              Action:
+                - sns:Publish
+              Resource: !Ref MaintenanceNotificationTopic
+      Events:
+        DailyMaintenanceCheck:
+          Type: Schedule
+          Properties:
+            Name: !Sub smart-asset-maintenance-daily-${Environment}
+            Description: Daily asset maintenance and cleaning check
+            Schedule: cron(0 13 * * ? *)
+            Enabled: true
   HealthFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -389,6 +454,9 @@ Resources:
               Authorizer: NONE
 
 Outputs:
+  MaintenanceNotificationTopicArn:
+    Description: SNS topic for maintenance notifications
+    Value: !Ref MaintenanceNotificationTopic
   ApiUrl:
     Description: REST API base URL
     Value: !Sub https://${AssetApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/${Environment}
