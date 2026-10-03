@@ -12,7 +12,7 @@
 #   scripts/dev.sh web                start the Vite dev server
 #   scripts/dev.sh down [--purge]     delete the stack (--purge also deletes the retained table)
 #
-# Override defaults with STACK_NAME, AWS_REGION, ENVIRONMENT.
+# Override defaults with STACK_NAME, AWS_REGION, ENVIRONMENT (dev or test).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -28,6 +28,10 @@ log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31mxx\033[0m %s\n' "$*" >&2; exit 1; }
 
 reject_production_target() {
+  case "$ENVIRONMENT" in
+    dev|test) ;;
+    *) die "Only non-production ENVIRONMENT=dev or test is supported." ;;
+  esac
   local value normalized
   for value in "$ENVIRONMENT" "$STACK_NAME"; do
     normalized="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
