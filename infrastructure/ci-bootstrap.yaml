@@ -1,0 +1,725 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  One-time CI/CD bootstrap for saltracker. Creates the GitHub OIDC provider, a
+  least-privilege deploy role per environment, the SAM artifact bucket and the
+  permission boundary that caps every Lambda role the deploy roles can create.
+  Deployed manually by an administrator, never by the pipeline, so the pipeline
+  cannot widen its own permissions. See docs/ci-cd.md.
+
+Parameters:
+  GitHubOrg:
+    Type: String
+    Default: PellizzoniCode
+  GitHubRepo:
+    Type: String
+    Default: saltracker
+  DevBranch:
+    Type: String
+    Default: develop
+    Description: Branch whose pushes may assume the dev deploy role.
+  ProdEnvironmentName:
+    Type: String
+    Default: prod
+    Description: >-
+      GitHub Environment whose jobs may assume the prod deploy role. Configure
+      required reviewers on it so every prod deploy waits for approval.
+  ExistingOidcProviderArn:
+    Type: String
+    Default: ''
+    Description: >-
+      ARN of the account's existing token.actions.githubusercontent.com OIDC
+      provider. Leave blank to create one (an account can only have one).
+  AmplifyAppId:
+    Type: String
+    Default: '*'
+    Description: >-
+      Amplify app the deploy roles may update and build. Narrow this from '*'
+      to the real app id once it is known.
+
+Conditions:
+  CreateOidcProvider: !Equals [!Ref ExistingOidcProviderArn, '']
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateOidcProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+      ThumbprintList: [6938fd4d98bab03faadb97b34396831e3780aea1]
+
+  SamArtifactBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub saltracker-sam-artifacts-${AWS::AccountId}-${AWS::Region}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldArtifacts
+            Status: Enabled
+            ExpirationInDays: 30
+
+  SamArtifactBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SamArtifactBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt SamArtifactBucket.Arn
+              - !Sub ${SamArtifactBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  # Ceiling for every Lambda execution role created by a deploy role. The deploy
+  # roles may only create roles that carry this boundary, so a compromised
+  # pipeline cannot mint a role more powerful than the app itself.
+  LambdaPermissionBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: saltracker-lambda-boundary
+      Description: Maximum permissions for saltracker Lambda execution roles
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: Logs
+            Effect: Allow
+            Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+            Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/smart-asset-*:*
+          - Sid: XRay
+            Effect: Allow
+            Action:
+              - xray:PutTraceSegments
+              - xray:PutTelemetryRecords
+              - xray:GetSamplingRules
+              - xray:GetSamplingTargets
+              - xray:GetSamplingStatisticSummaries
+            Resource: '*'
+          - Sid: AssetTable
+            Effect: Allow
+            Action:
+              - dynamodb:GetItem
+              - dynamodb:PutItem
+              - dynamodb:UpdateItem
+              - dynamodb:DeleteItem
+              - dynamodb:Query
+              - dynamodb:Scan
+              - dynamodb:BatchGetItem
+              - dynamodb:BatchWriteItem
+              - dynamodb:ConditionCheckItem
+            Resource:
+              - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/smart-asset-tracker-*
+              - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/smart-asset-tracker-*/index/*
+          - Sid: PhotoObjects
+            Effect: Allow
+            Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+            Resource: arn:aws:s3:::smart-asset-tracker-*-photos-*/*
+          - Sid: PhotoBucketList
+            Effect: Allow
+            Action: s3:ListBucket
+            Resource: arn:aws:s3:::smart-asset-tracker-*-photos-*
+          - Sid: Bedrock
+            Effect: Allow
+            Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream]
+            Resource:
+              - arn:aws:bedrock:*::foundation-model/*
+              - !Sub arn:aws:bedrock:*:${AWS::AccountId}:inference-profile/*
+          - Sid: Notifications
+            Effect: Allow
+            Action: sns:Publish
+            Resource: !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:smart-asset-*
+
+  # ---- dev ----------------------------------------------------------------
+  DeployPlatformPolicyDev:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: saltracker-deploy-dev-platform
+      Description: CloudFormation, IAM, Lambda, logging and scheduling for the dev stack
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: StackChangeSets
+            Effect: Allow
+            Action:
+              - cloudformation:CreateChangeSet
+              - cloudformation:DescribeChangeSet
+              - cloudformation:ExecuteChangeSet
+              - cloudformation:DeleteChangeSet
+              - cloudformation:DescribeStacks
+              - cloudformation:DescribeStackEvents
+              - cloudformation:DescribeStackResource
+              - cloudformation:DescribeStackResources
+              - cloudformation:ListStackResources
+              - cloudformation:GetTemplate
+            Resource: !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/smart-asset-tracker-dev/*
+          - Sid: SamTransform
+            Effect: Allow
+            Action: cloudformation:CreateChangeSet
+            Resource: !Sub arn:aws:cloudformation:${AWS::Region}:aws:transform/Serverless-2016-10-31
+          - Sid: TemplateSummary
+            Effect: Allow
+            Action: cloudformation:GetTemplateSummary
+            Resource: '*'
+          - Sid: ArtifactObjects
+            Effect: Allow
+            Action: [s3:GetObject, s3:PutObject]
+            Resource: !Sub ${SamArtifactBucket.Arn}/dev/*
+          - Sid: ArtifactBucket
+            Effect: Allow
+            Action: [s3:ListBucket, s3:GetBucketLocation]
+            Resource: !GetAtt SamArtifactBucket.Arn
+          - Sid: CreateBoundedRoles
+            Effect: Allow
+            Action: [iam:CreateRole, iam:PutRolePermissionsBoundary]
+            Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/smart-asset-tracker-dev-*
+            Condition:
+              StringEquals:
+                iam:PermissionsBoundary: !Ref LambdaPermissionBoundary
+          - Sid: ManageStackRoles
+            Effect: Allow
+            Action:
+              - iam:DeleteRole
+              - iam:GetRole
+              - iam:TagRole
+              - iam:UntagRole
+              - iam:UpdateAssumeRolePolicy
+              - iam:PutRolePolicy
+              - iam:GetRolePolicy
+              - iam:DeleteRolePolicy
+              - iam:ListRolePolicies
+              - iam:ListAttachedRolePolicies
+            Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/smart-asset-tracker-dev-*
+          - Sid: AttachAwsManagedLambdaPolicies
+            Effect: Allow
+            Action: [iam:AttachRolePolicy, iam:DetachRolePolicy]
+            Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/smart-asset-tracker-dev-*
+            Condition:
+              ArnEquals:
+                iam:PolicyARN:
+                  - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+                  - arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess
+          - Sid: PassRoleToLambda
+            Effect: Allow
+            Action: iam:PassRole
+            Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/smart-asset-tracker-dev-*
+            Condition:
+              StringEquals:
+                iam:PassedToService: lambda.amazonaws.com
+          - Sid: NeverDropTheBoundary
+            Effect: Deny
+            Action: iam:DeleteRolePermissionsBoundary
+            Resource: '*'
+          - Sid: Functions
+            Effect: Allow
+            Action:
+              - lambda:CreateFunction
+              - lambda:DeleteFunction
+              - lambda:GetFunction
+              - lambda:GetFunctionConfiguration
+              - lambda:UpdateFunctionCode
+              - lambda:UpdateFunctionConfiguration
+              - lambda:AddPermission
+              - lambda:RemovePermission
+              - lambda:GetPolicy
+              - lambda:ListVersionsByFunction
+              - lambda:TagResource
+              - lambda:UntagResource
+              - lambda:ListTags
+            Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:smart-asset-*-dev
+          - Sid: LogGroups
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:DeleteLogGroup
+              - logs:PutRetentionPolicy
+              - logs:DeleteRetentionPolicy
+              - logs:TagResource
+              - logs:UntagResource
+              - logs:ListTagsForResource
+            Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/smart-asset-*-dev:*
+          - Sid: DescribeLogGroups
+            Effect: Allow
+            Action: logs:DescribeLogGroups
+            Resource: '*'
+          - Sid: Alarms
+            Effect: Allow
+            Action:
+              - cloudwatch:PutMetricAlarm
+              - cloudwatch:DeleteAlarms
+              - cloudwatch:TagResource
+              - cloudwatch:UntagResource
+              - cloudwatch:ListTagsForResource
+            Resource: !Sub arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:smart-asset-*-dev-*
+          - Sid: DescribeAlarms
+            Effect: Allow
+            Action: cloudwatch:DescribeAlarms
+            Resource: '*'
+          - Sid: ScheduleRules
+            Effect: Allow
+            Action:
+              - events:PutRule
+              - events:DeleteRule
+              - events:DescribeRule
+              - events:PutTargets
+              - events:RemoveTargets
+              - events:ListTargetsByRule
+              - events:TagResource
+              - events:UntagResource
+            Resource: !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/smart-asset-tracker-dev-*
+
+  DeployResourcesPolicyDev:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: saltracker-deploy-dev-resources
+      Description: API, auth, data, messaging and frontend build permissions for the dev stack
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          # API Gateway ids are generated, so these cannot be scoped by name.
+          - Sid: RestApis
+            Effect: Allow
+            Action: [apigateway:GET, apigateway:POST, apigateway:PUT, apigateway:PATCH, apigateway:DELETE]
+            Resource:
+              - !Sub arn:aws:apigateway:${AWS::Region}::/restapis
+              - !Sub arn:aws:apigateway:${AWS::Region}::/restapis/*
+              - !Sub arn:aws:apigateway:${AWS::Region}::/tags/*
+          # Cognito user pool ids are generated, so these cannot be scoped by name.
+          - Sid: UserPool
+            Effect: Allow
+            Action:
+              - cognito-idp:CreateUserPool
+              - cognito-idp:UpdateUserPool
+              - cognito-idp:DeleteUserPool
+              - cognito-idp:DescribeUserPool
+              - cognito-idp:CreateUserPoolClient
+              - cognito-idp:UpdateUserPoolClient
+              - cognito-idp:DeleteUserPoolClient
+              - cognito-idp:DescribeUserPoolClient
+              - cognito-idp:CreateGroup
+              - cognito-idp:UpdateGroup
+              - cognito-idp:DeleteGroup
+              - cognito-idp:GetGroup
+              - cognito-idp:TagResource
+              - cognito-idp:UntagResource
+              - cognito-idp:ListTagsForResource
+            Resource: !Sub arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/*
+          - Sid: AssetTable
+            Effect: Allow
+            Action:
+              - dynamodb:CreateTable
+              - dynamodb:UpdateTable
+              - dynamodb:DeleteTable
+              - dynamodb:DescribeTable
+              - dynamodb:DescribeContinuousBackups
+              - dynamodb:UpdateContinuousBackups
+              - dynamodb:DescribeTimeToLive
+              - dynamodb:UpdateTimeToLive
+              - dynamodb:TagResource
+              - dynamodb:UntagResource
+              - dynamodb:ListTagsOfResource
+            Resource: !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/smart-asset-tracker-dev
+          - Sid: PhotoBucketConfig
+            Effect: Allow
+            Action:
+              - s3:CreateBucket
+              - s3:DeleteBucket
+              - s3:ListBucket
+              - s3:GetBucket*
+              - s3:PutBucket*
+              - s3:DeleteBucketPolicy
+              - s3:GetLifecycleConfiguration
+              - s3:PutLifecycleConfiguration
+              - s3:GetEncryptionConfiguration
+              - s3:PutEncryptionConfiguration
+            Resource: arn:aws:s3:::smart-asset-tracker-dev-photos-*
+          - Sid: Topics
+            Effect: Allow
+            Action:
+              - sns:CreateTopic
+              - sns:DeleteTopic
+              - sns:GetTopicAttributes
+              - sns:SetTopicAttributes
+              - sns:Subscribe
+              - sns:Unsubscribe
+              - sns:GetSubscriptionAttributes
+              - sns:ListSubscriptionsByTopic
+              - sns:TagResource
+              - sns:UntagResource
+              - sns:ListTagsForResource
+            Resource:
+              - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:smart-asset-*-dev
+              - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:smart-asset-*-dev:*
+          - Sid: DeadLetterQueue
+            Effect: Allow
+            Action:
+              - sqs:CreateQueue
+              - sqs:DeleteQueue
+              - sqs:GetQueueAttributes
+              - sqs:SetQueueAttributes
+              - sqs:GetQueueUrl
+              - sqs:TagQueue
+              - sqs:UntagQueue
+              - sqs:ListQueueTags
+            Resource: !Sub arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:smart-asset-tracker-dev-*
+          - Sid: FrontendBuild
+            Effect: Allow
+            Action:
+              - amplify:GetApp
+              - amplify:GetBranch
+              - amplify:UpdateBranch
+              - amplify:StartJob
+              - amplify:GetJob
+            Resource:
+              - !Sub arn:aws:amplify:${AWS::Region}:${AWS::AccountId}:apps/${AmplifyAppId}
+              - !Sub arn:aws:amplify:${AWS::Region}:${AWS::AccountId}:apps/${AmplifyAppId}/branches/*
+              - !Sub arn:aws:amplify:${AWS::Region}:${AWS::AccountId}:apps/${AmplifyAppId}/branches/*/jobs/*
+
+  DeployRoleDev:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: saltracker-deploy-dev
+      Description: Assumed by GitHub Actions to deploy the dev stack
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If [CreateOidcProvider, !Ref GitHubOidcProvider, !Ref ExistingOidcProviderArn]
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubOrg}/${GitHubRepo}:ref:refs/heads/${DevBranch}
+      ManagedPolicyArns:
+        - !Ref DeployPlatformPolicyDev
+        - !Ref DeployResourcesPolicyDev
+      Policies:
+        # scripts/smoke_test.py invokes the functions and inspects the dev stack.
+        - PolicyName: smoke-test
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:smart-asset-*-dev
+              - Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:Query, dynamodb:DeleteItem]
+                Resource: !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/smart-asset-tracker-dev
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource: arn:aws:s3:::smart-asset-tracker-dev-photos-*/*
+              - Effect: Allow
+                Action: [sns:Publish]
+                Resource: !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:smart-asset-maintenance-dev
+              - Effect: Allow
+                Action: sqs:GetQueueAttributes
+                Resource: !Sub arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:smart-asset-tracker-dev-*
+              - Effect: Allow
+                Action: logs:FilterLogEvents
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/smart-asset-*-dev:*
+
+  # ---- prod ----------------------------------------------------------------
+  DeployPlatformPolicyProd:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: saltracker-deploy-prod-platform
+      Description: CloudFormation, IAM, Lambda, logging and scheduling for the prod stack
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: StackChangeSets
+            Effect: Allow
+            Action:
+              - cloudformation:CreateChangeSet
+              - cloudformation:DescribeChangeSet
+              - cloudformation:ExecuteChangeSet
+              - cloudformation:DeleteChangeSet
+              - cloudformation:DescribeStacks
+              - cloudformation:DescribeStackEvents
+              - cloudformation:DescribeStackResource
+              - cloudformation:DescribeStackResources
+              - cloudformation:ListStackResources
+              - cloudformation:GetTemplate
+            Resource: !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/smart-asset-tracker-prod/*
+          - Sid: SamTransform
+            Effect: Allow
+            Action: cloudformation:CreateChangeSet
+            Resource: !Sub arn:aws:cloudformation:${AWS::Region}:aws:transform/Serverless-2016-10-31
+          - Sid: TemplateSummary
+            Effect: Allow
+            Action: cloudformation:GetTemplateSummary
+            Resource: '*'
+          - Sid: ArtifactObjects
+            Effect: Allow
+            Action: [s3:GetObject, s3:PutObject]
+            Resource: !Sub ${SamArtifactBucket.Arn}/prod/*
+          - Sid: ArtifactBucket
+            Effect: Allow
+            Action: [s3:ListBucket, s3:GetBucketLocation]
+            Resource: !GetAtt SamArtifactBucket.Arn
+          - Sid: CreateBoundedRoles
+            Effect: Allow
+            Action: [iam:CreateRole, iam:PutRolePermissionsBoundary]
+            Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/smart-asset-tracker-prod-*
+            Condition:
+              StringEquals:
+                iam:PermissionsBoundary: !Ref LambdaPermissionBoundary
+          - Sid: ManageStackRoles
+            Effect: Allow
+            Action:
+              - iam:DeleteRole
+              - iam:GetRole
+              - iam:TagRole
+              - iam:UntagRole
+              - iam:UpdateAssumeRolePolicy
+              - iam:PutRolePolicy
+              - iam:GetRolePolicy
+              - iam:DeleteRolePolicy
+              - iam:ListRolePolicies
+              - iam:ListAttachedRolePolicies
+            Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/smart-asset-tracker-prod-*
+          - Sid: AttachAwsManagedLambdaPolicies
+            Effect: Allow
+            Action: [iam:AttachRolePolicy, iam:DetachRolePolicy]
+            Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/smart-asset-tracker-prod-*
+            Condition:
+              ArnEquals:
+                iam:PolicyARN:
+                  - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+                  - arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess
+          - Sid: PassRoleToLambda
+            Effect: Allow
+            Action: iam:PassRole
+            Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/smart-asset-tracker-prod-*
+            Condition:
+              StringEquals:
+                iam:PassedToService: lambda.amazonaws.com
+          - Sid: NeverDropTheBoundary
+            Effect: Deny
+            Action: iam:DeleteRolePermissionsBoundary
+            Resource: '*'
+          - Sid: Functions
+            Effect: Allow
+            Action:
+              - lambda:CreateFunction
+              - lambda:DeleteFunction
+              - lambda:GetFunction
+              - lambda:GetFunctionConfiguration
+              - lambda:UpdateFunctionCode
+              - lambda:UpdateFunctionConfiguration
+              - lambda:AddPermission
+              - lambda:RemovePermission
+              - lambda:GetPolicy
+              - lambda:ListVersionsByFunction
+              - lambda:TagResource
+              - lambda:UntagResource
+              - lambda:ListTags
+            Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:smart-asset-*-prod
+          - Sid: LogGroups
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:DeleteLogGroup
+              - logs:PutRetentionPolicy
+              - logs:DeleteRetentionPolicy
+              - logs:TagResource
+              - logs:UntagResource
+              - logs:ListTagsForResource
+            Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/smart-asset-*-prod:*
+          - Sid: DescribeLogGroups
+            Effect: Allow
+            Action: logs:DescribeLogGroups
+            Resource: '*'
+          - Sid: Alarms
+            Effect: Allow
+            Action:
+              - cloudwatch:PutMetricAlarm
+              - cloudwatch:DeleteAlarms
+              - cloudwatch:TagResource
+              - cloudwatch:UntagResource
+              - cloudwatch:ListTagsForResource
+            Resource: !Sub arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:smart-asset-*-prod-*
+          - Sid: DescribeAlarms
+            Effect: Allow
+            Action: cloudwatch:DescribeAlarms
+            Resource: '*'
+          - Sid: ScheduleRules
+            Effect: Allow
+            Action:
+              - events:PutRule
+              - events:DeleteRule
+              - events:DescribeRule
+              - events:PutTargets
+              - events:RemoveTargets
+              - events:ListTargetsByRule
+              - events:TagResource
+              - events:UntagResource
+            Resource: !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/smart-asset-tracker-prod-*
+
+  DeployResourcesPolicyProd:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: saltracker-deploy-prod-resources
+      Description: API, auth, data, messaging and frontend build permissions for the prod stack
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          # API Gateway ids are generated, so these cannot be scoped by name.
+          - Sid: RestApis
+            Effect: Allow
+            Action: [apigateway:GET, apigateway:POST, apigateway:PUT, apigateway:PATCH, apigateway:DELETE]
+            Resource:
+              - !Sub arn:aws:apigateway:${AWS::Region}::/restapis
+              - !Sub arn:aws:apigateway:${AWS::Region}::/restapis/*
+              - !Sub arn:aws:apigateway:${AWS::Region}::/tags/*
+          # Cognito user pool ids are generated, so these cannot be scoped by name.
+          - Sid: UserPool
+            Effect: Allow
+            Action:
+              - cognito-idp:CreateUserPool
+              - cognito-idp:UpdateUserPool
+              - cognito-idp:DeleteUserPool
+              - cognito-idp:DescribeUserPool
+              - cognito-idp:CreateUserPoolClient
+              - cognito-idp:UpdateUserPoolClient
+              - cognito-idp:DeleteUserPoolClient
+              - cognito-idp:DescribeUserPoolClient
+              - cognito-idp:CreateGroup
+              - cognito-idp:UpdateGroup
+              - cognito-idp:DeleteGroup
+              - cognito-idp:GetGroup
+              - cognito-idp:TagResource
+              - cognito-idp:UntagResource
+              - cognito-idp:ListTagsForResource
+            Resource: !Sub arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/*
+          - Sid: AssetTable
+            Effect: Allow
+            Action:
+              - dynamodb:CreateTable
+              - dynamodb:UpdateTable
+              - dynamodb:DeleteTable
+              - dynamodb:DescribeTable
+              - dynamodb:DescribeContinuousBackups
+              - dynamodb:UpdateContinuousBackups
+              - dynamodb:DescribeTimeToLive
+              - dynamodb:UpdateTimeToLive
+              - dynamodb:TagResource
+              - dynamodb:UntagResource
+              - dynamodb:ListTagsOfResource
+            Resource: !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/smart-asset-tracker-prod
+          - Sid: PhotoBucketConfig
+            Effect: Allow
+            Action:
+              - s3:CreateBucket
+              - s3:DeleteBucket
+              - s3:ListBucket
+              - s3:GetBucket*
+              - s3:PutBucket*
+              - s3:DeleteBucketPolicy
+              - s3:GetLifecycleConfiguration
+              - s3:PutLifecycleConfiguration
+              - s3:GetEncryptionConfiguration
+              - s3:PutEncryptionConfiguration
+            Resource: arn:aws:s3:::smart-asset-tracker-prod-photos-*
+          - Sid: Topics
+            Effect: Allow
+            Action:
+              - sns:CreateTopic
+              - sns:DeleteTopic
+              - sns:GetTopicAttributes
+              - sns:SetTopicAttributes
+              - sns:Subscribe
+              - sns:Unsubscribe
+              - sns:GetSubscriptionAttributes
+              - sns:ListSubscriptionsByTopic
+              - sns:TagResource
+              - sns:UntagResource
+              - sns:ListTagsForResource
+            Resource:
+              - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:smart-asset-*-prod
+              - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:smart-asset-*-prod:*
+          - Sid: DeadLetterQueue
+            Effect: Allow
+            Action:
+              - sqs:CreateQueue
+              - sqs:DeleteQueue
+              - sqs:GetQueueAttributes
+              - sqs:SetQueueAttributes
+              - sqs:GetQueueUrl
+              - sqs:TagQueue
+              - sqs:UntagQueue
+              - sqs:ListQueueTags
+            Resource: !Sub arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:smart-asset-tracker-prod-*
+          - Sid: FrontendBuild
+            Effect: Allow
+            Action:
+              - amplify:GetApp
+              - amplify:GetBranch
+              - amplify:UpdateBranch
+              - amplify:StartJob
+              - amplify:GetJob
+            Resource:
+              - !Sub arn:aws:amplify:${AWS::Region}:${AWS::AccountId}:apps/${AmplifyAppId}
+              - !Sub arn:aws:amplify:${AWS::Region}:${AWS::AccountId}:apps/${AmplifyAppId}/branches/*
+              - !Sub arn:aws:amplify:${AWS::Region}:${AWS::AccountId}:apps/${AmplifyAppId}/branches/*/jobs/*
+
+  DeployRoleProd:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: saltracker-deploy-prod
+      Description: Assumed by GitHub Actions to deploy the prod stack
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If [CreateOidcProvider, !Ref GitHubOidcProvider, !Ref ExistingOidcProviderArn]
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubOrg}/${GitHubRepo}:environment:${ProdEnvironmentName}
+      ManagedPolicyArns:
+        - !Ref DeployPlatformPolicyProd
+        - !Ref DeployResourcesPolicyProd
+      Policies:
+        # Post-deploy health check only; the smoke test is dev/test only.
+        - PolicyName: health-check
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:smart-asset-health-prod
+
+Outputs:
+  DevDeployRoleArn:
+    Description: Set as the AWS_ROLE_ARN variable on the GitHub dev workflow
+    Value: !GetAtt DeployRoleDev.Arn
+  ProdDeployRoleArn:
+    Description: Set as the AWS_ROLE_ARN variable on the GitHub Environment named by ProdEnvironmentName
+    Value: !GetAtt DeployRoleProd.Arn
+  SamArtifactBucketName:
+    Description: Pass to sam deploy --s3-bucket (with --s3-prefix <env>)
+    Value: !Ref SamArtifactBucket
+  LambdaPermissionBoundaryArn:
+    Description: Pass as the PermissionsBoundaryArn parameter of infrastructure/template.yaml
+    Value: !Ref LambdaPermissionBoundary

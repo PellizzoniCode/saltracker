@@ -1,0 +1,110 @@
+name: Deploy stack
+description: >-
+  Assume the environment's AWS deploy role over OIDC, build and deploy the SAM
+  stack, then rebuild the Amplify frontend with the stack's outputs. The caller
+  must check out the repo first and grant the job `id-token: write`.
+
+inputs:
+  environment:
+    description: Stack environment (dev or prod); the stack is smart-asset-tracker-<environment>
+    required: true
+  role-arn:
+    description: Deploy role to assume (DevDeployRoleArn / ProdDeployRoleArn from the bootstrap stack)
+    required: true
+  artifact-bucket:
+    description: SAM artifact bucket (SamArtifactBucketName from the bootstrap stack)
+    required: true
+  permissions-boundary-arn:
+    description: LambdaPermissionBoundaryArn from the bootstrap stack
+    required: true
+  photo-upload-origins:
+    description: Comma-separated browser origins allowed to upload photos. Required for prod.
+    default: ''
+  amplify-app-id:
+    description: Amplify app to rebuild. Leave empty to skip the frontend step.
+    default: ''
+  amplify-branch:
+    description: Amplify branch to rebuild
+    default: ''
+  region:
+    default: us-east-1
+
+runs:
+  using: composite
+  steps:
+    - name: Check inputs
+      shell: bash
+      env:
+        ENVIRONMENT: ${{ inputs.environment }}
+        PHOTO_UPLOAD_ORIGINS: ${{ inputs.photo-upload-origins }}
+        ROLE_ARN: ${{ inputs.role-arn }}
+      run: |
+        if [ -z "$ROLE_ARN" ]; then
+          echo "::error::No deploy role ARN configured for $ENVIRONMENT. See docs/ci-cd.md (GitHub variables)."
+          exit 1
+        fi
+        # The template default allows the dev Amplify URL and localhost; never ship that to prod.
+        if [ "$ENVIRONMENT" = prod ] && [ -z "$PHOTO_UPLOAD_ORIGINS" ]; then
+          echo "::error::PHOTO_UPLOAD_ORIGINS must be set on the prod environment."
+          exit 1
+        fi
+
+    - uses: actions/setup-python@v7
+      with:
+        python-version: "3.11"
+    - uses: aws-actions/setup-sam@v3
+    - uses: aws-actions/configure-aws-credentials@v6
+      with:
+        role-to-assume: ${{ inputs.role-arn }}
+        aws-region: ${{ inputs.region }}
+
+    - name: Build
+      shell: bash
+      run: sam build --template-file infrastructure/template.yaml
+
+    - name: Deploy
+      shell: bash
+      env:
+        ENVIRONMENT: ${{ inputs.environment }}
+        ARTIFACT_BUCKET: ${{ inputs.artifact-bucket }}
+        BOUNDARY_ARN: ${{ inputs.permissions-boundary-arn }}
+        PHOTO_UPLOAD_ORIGINS: ${{ inputs.photo-upload-origins }}
+      run: |
+        overrides=("Environment=$ENVIRONMENT" "PermissionsBoundaryArn=$BOUNDARY_ARN")
+        if [ -n "$PHOTO_UPLOAD_ORIGINS" ]; then
+          overrides+=("PhotoUploadOrigins=\"$PHOTO_UPLOAD_ORIGINS\"")
+        fi
+        # --no-resolve-s3 overrides the dev-only samconfig.toml, which turns on resolve_s3.
+        sam deploy \
+          --stack-name "smart-asset-tracker-$ENVIRONMENT" \
+          --s3-bucket "$ARTIFACT_BUCKET" --s3-prefix "$ENVIRONMENT" --no-resolve-s3 \
+          --capabilities CAPABILITY_IAM \
+          --parameter-overrides "${overrides[@]}" \
+          --no-confirm-changeset --no-fail-on-empty-changeset
+
+    - name: Rebuild frontend on Amplify
+      if: inputs.amplify-app-id != ''
+      shell: bash
+      env:
+        ENVIRONMENT: ${{ inputs.environment }}
+        APP_ID: ${{ inputs.amplify-app-id }}
+        BRANCH: ${{ inputs.amplify-branch }}
+        REGION: ${{ inputs.region }}
+      run: |
+        stack="smart-asset-tracker-$ENVIRONMENT"
+        output() {
+          aws cloudformation describe-stacks --stack-name "$stack" \
+            --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text
+        }
+        new=$(jq -n -c \
+          --arg api "$(output ApiUrl)" --arg pool "$(output UserPoolId)" \
+          --arg client "$(output UserPoolClientId)" --arg region "$REGION" \
+          '{VITE_API_URL: $api, VITE_USER_POOL_ID: $pool, VITE_USER_POOL_CLIENT_ID: $client, VITE_AWS_REGION: $region}')
+        # update-branch replaces the whole variable map, so merge into what is already set.
+        existing=$(aws amplify get-branch --app-id "$APP_ID" --branch-name "$BRANCH" \
+          --query 'branch.environmentVariables' --output json)
+        merged=$(jq -c -n --argjson old "${existing:-null}" --argjson new "$new" '($old // {}) + $new')
+        aws amplify update-branch --app-id "$APP_ID" --branch-name "$BRANCH" --environment-variables "$merged" > /dev/null
+        job=$(aws amplify start-job --app-id "$APP_ID" --branch-name "$BRANCH" --job-type RELEASE \
+          --query 'jobSummary.jobId' --output text)
+        echo "Started Amplify job $job for $APP_ID/$BRANCH"

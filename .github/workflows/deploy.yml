@@ -1,0 +1,99 @@
+name: Deploy
+
+# develop -> dev stack, main -> prod stack (after a reviewer approves the `prod`
+# GitHub Environment). Credentials come from GitHub OIDC; see docs/ci-cd.md.
+on:
+  push:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+
+# One deploy per branch at a time; a queued run waits instead of cancelling a deploy mid-flight.
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
+  deploy-dev:
+    if: github.ref == 'refs/heads/develop'
+    needs: test
+    runs-on: ubuntu-latest
+    # No `environment:` here on purpose: it would change the OIDC subject to
+    # environment:<name>, which the dev role does not trust (it trusts the branch).
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/deploy-stack
+        with:
+          environment: dev
+          role-arn: ${{ vars.AWS_DEV_ROLE_ARN }}
+          artifact-bucket: ${{ vars.SAM_ARTIFACT_BUCKET }}
+          permissions-boundary-arn: ${{ vars.PERMISSIONS_BOUNDARY_ARN }}
+          photo-upload-origins: ${{ vars.DEV_PHOTO_UPLOAD_ORIGINS }}
+          amplify-app-id: ${{ vars.DEV_AMPLIFY_APP_ID }}
+          amplify-branch: ${{ vars.DEV_AMPLIFY_BRANCH }}
+
+  smoke-dev:
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEV_ROLE_ARN }}
+          aws-region: us-east-1
+      - name: Smoke test
+        run: python scripts/smoke_test.py --env dev --output smoke-test-results.md
+      - name: Add report to the run summary
+        if: always()
+        run: '[ -f smoke-test-results.md ] && cat smoke-test-results.md >> "$GITHUB_STEP_SUMMARY" || true'
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: smoke-test-results
+          path: smoke-test-results.md
+          if-no-files-found: ignore
+
+  deploy-prod:
+    if: github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    # Required reviewers on this Environment gate the run, and the prod role only
+    # trusts tokens issued for it, so no approval means no credentials.
+    environment: prod
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/deploy-stack
+        with:
+          environment: prod
+          role-arn: ${{ vars.AWS_ROLE_ARN }}
+          artifact-bucket: ${{ vars.SAM_ARTIFACT_BUCKET }}
+          permissions-boundary-arn: ${{ vars.PERMISSIONS_BOUNDARY_ARN }}
+          photo-upload-origins: ${{ vars.PHOTO_UPLOAD_ORIGINS }}
+          amplify-app-id: ${{ vars.AMPLIFY_APP_ID }}
+          amplify-branch: ${{ vars.AMPLIFY_BRANCH }}
+      # The smoke test is dev/test only, so prod gets a read-only liveness check.
+      - name: Health check
+        run: |
+          aws lambda invoke --function-name smart-asset-health-prod \
+            --cli-binary-format raw-in-base64-out --payload '{}' health.json > invoke.json
+          cat health.json
+          if jq -e '.FunctionError' invoke.json > /dev/null; then
+            echo "::error::Health Lambda returned an error"; exit 1
+          fi
+          jq -e '.statusCode == 200 and (.body | fromjson | .status == "UP")' health.json > /dev/null
