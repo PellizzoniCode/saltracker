@@ -18,8 +18,10 @@ The shared checks live in `test.yml` and the shared deploy steps in `.github/act
 
 | Role | Trusted token subject | Effect |
 |---|---|---|
-| `saltracker-deploy-dev` | `repo:PellizzoniCode/saltracker:ref:refs/heads/develop` | Only pushes to `develop`. |
-| `saltracker-deploy-prod` | `repo:PellizzoniCode/saltracker:environment:prod` | Only jobs in the `prod` GitHub Environment, which waits for a reviewer. |
+| `saltracker-deploy-dev` | `<prefix>:ref:refs/heads/develop` | Only pushes to `develop`. |
+| `saltracker-deploy-prod` | `<prefix>:environment:prod` | Only jobs in the `prod` GitHub Environment, which waits for a reviewer. |
+
+`<prefix>` is `repo:PellizzoniCode/saltracker` in the classic format, or `repo:PellizzoniCode@191217257/saltracker@1367469052` with GitHub's immutable subject (this repo). It is set by the `GitHubSubjectPrefix` parameter below.
 
 Pull requests and forks get a different subject that no role trusts, so they can never reach AWS. The dev deploy job must not declare `environment:`; doing so changes its subject and the dev role would refuse it.
 
@@ -43,6 +45,13 @@ Parameters (add with `--parameter-overrides`):
 
 - `ExistingOidcProviderArn`: set it if the account already has a `token.actions.githubusercontent.com` provider. An account can only have one, and the stack fails if you try to create a second.
 - `AmplifyAppId`: set the real Amplify app id. It defaults to `*`, which lets the deploy roles update any Amplify app in the account.
+- `GitHubSubjectPrefix`: **required if the repo uses GitHub's immutable OIDC subject**, which is the default for newer repositories. Their tokens carry numeric owner and repo ids (`repo:<org>@<owner-id>/<repo>@<repo-id>:...`), so the role trust only matches if you pass that prefix. Read it from the `sub_claim_prefix` field:
+
+  ```bash
+  gh api repos/PellizzoniCode/saltracker/actions/oidc/customization/sub
+  ```
+
+  Then add `GitHubSubjectPrefix=<that value>` to `--parameter-overrides`. If the role is refused with `Not authorized to perform sts:AssumeRoleWithWebIdentity`, a wrong prefix is the first thing to check; CloudTrail's rejected `AssumeRoleWithWebIdentity` events show the subject GitHub actually sent.
 - `GitHubOrg`, `GitHubRepo`, `DevBranch`, `ProdEnvironmentName`: only if you fork or rename.
 
 The stack is deliberately not deployed by the pipeline, so the pipeline can never widen its own permissions.

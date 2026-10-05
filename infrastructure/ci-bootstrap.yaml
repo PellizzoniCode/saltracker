@@ -13,6 +13,16 @@ Parameters:
   GitHubRepo:
     Type: String
     Default: saltracker
+  GitHubSubjectPrefix:
+    Type: String
+    Default: ''
+    Description: >-
+      Start of the OIDC subject GitHub puts in its tokens. Leave blank for the
+      classic format repo:<org>/<repo>. Repositories using GitHub's immutable
+      subject claim need the numeric ids, for example
+      repo:<org>@<owner-id>/<repo>@<repo-id>. Read it with:
+      gh api repos/<org>/<repo>/actions/oidc/customization/sub
+      (the sub_claim_prefix field).
   DevBranch:
     Type: String
     Default: develop
@@ -38,6 +48,7 @@ Parameters:
 
 Conditions:
   CreateOidcProvider: !Equals [!Ref ExistingOidcProviderArn, '']
+  HasSubjectPrefix: !Not [!Equals [!Ref GitHubSubjectPrefix, '']]
 
 Resources:
   GitHubOidcProvider:
@@ -406,7 +417,10 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubOrg}/${GitHubRepo}:ref:refs/heads/${DevBranch}
+                token.actions.githubusercontent.com:sub: !Join
+                  - ''
+                  - - !If [HasSubjectPrefix, !Ref GitHubSubjectPrefix, !Sub 'repo:${GitHubOrg}/${GitHubRepo}']
+                    - !Sub ':ref:refs/heads/${DevBranch}'
       ManagedPolicyArns:
         - !Ref DeployPlatformPolicyDev
         - !Ref DeployResourcesPolicyDev
@@ -696,7 +710,10 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubOrg}/${GitHubRepo}:environment:${ProdEnvironmentName}
+                token.actions.githubusercontent.com:sub: !Join
+                  - ''
+                  - - !If [HasSubjectPrefix, !Ref GitHubSubjectPrefix, !Sub 'repo:${GitHubOrg}/${GitHubRepo}']
+                    - !Sub ':environment:${ProdEnvironmentName}'
       ManagedPolicyArns:
         - !Ref DeployPlatformPolicyProd
         - !Ref DeployResourcesPolicyProd
