@@ -43,8 +43,8 @@ Parameters:
     Type: String
     Default: '*'
     Description: >-
-      Amplify app the deploy roles may update and build. Narrow this from '*'
-      to the real app id once it is known.
+      Amplify app the deploy roles may publish the frontend to. Narrow this
+      from '*' to the real app id once it is known.
 
 Conditions:
   CreateOidcProvider: !Equals [!Ref ExistingOidcProviderArn, '']
@@ -389,13 +389,14 @@ Resources:
               - sqs:UntagQueue
               - sqs:ListQueueTags
             Resource: !Sub arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:smart-asset-tracker-dev-*
-          - Sid: FrontendBuild
+          # Manual deployment: create-deployment, upload the zip, start-deployment, poll get-job.
+          - Sid: FrontendPublish
             Effect: Allow
             Action:
               - amplify:GetApp
               - amplify:GetBranch
-              - amplify:UpdateBranch
-              - amplify:StartJob
+              - amplify:CreateDeployment
+              - amplify:StartDeployment
               - amplify:GetJob
             Resource:
               - !Sub arn:aws:amplify:${AWS::Region}:${AWS::AccountId}:apps/${AmplifyAppId}
@@ -683,13 +684,14 @@ Resources:
               - sqs:UntagQueue
               - sqs:ListQueueTags
             Resource: !Sub arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:smart-asset-tracker-prod-*
-          - Sid: FrontendBuild
+          # Manual deployment: create-deployment, upload the zip, start-deployment, poll get-job.
+          - Sid: FrontendPublish
             Effect: Allow
             Action:
               - amplify:GetApp
               - amplify:GetBranch
-              - amplify:UpdateBranch
-              - amplify:StartJob
+              - amplify:CreateDeployment
+              - amplify:StartDeployment
               - amplify:GetJob
             Resource:
               - !Sub arn:aws:amplify:${AWS::Region}:${AWS::AccountId}:apps/${AmplifyAppId}

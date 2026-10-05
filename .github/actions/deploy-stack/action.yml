@@ -1,8 +1,9 @@
 name: Deploy stack
 description: >-
   Assume the environment's AWS deploy role over OIDC, build and deploy the SAM
-  stack, then rebuild the Amplify frontend with the stack's outputs. The caller
-  must check out the repo first and grant the job `id-token: write`.
+  stack, then build the frontend against the stack's outputs and publish it to
+  AWS Amplify. The caller must check out the repo first and grant the job
+  `id-token: write`.
 
 inputs:
   environment:
@@ -21,10 +22,12 @@ inputs:
     description: Comma-separated browser origins allowed to upload photos. Required for prod.
     default: ''
   amplify-app-id:
-    description: Amplify app to rebuild. Leave empty to skip the frontend step.
+    description: >-
+      Amplify app to publish to. It must be a manual-deploy app (created without a Git
+      repository). Leave empty to skip the frontend steps.
     default: ''
   amplify-branch:
-    description: Amplify branch to rebuild
+    description: Amplify branch to publish to
     default: ''
   region:
     default: us-east-1
@@ -82,13 +85,20 @@ runs:
           --parameter-overrides "${overrides[@]}" \
           --no-confirm-changeset --no-fail-on-empty-changeset
 
-    - name: Rebuild frontend on Amplify
+    - name: Set up Node
+      if: inputs.amplify-app-id != ''
+      uses: actions/setup-node@v7
+      with:
+        node-version: 20
+        cache: npm
+        cache-dependency-path: frontend/package-lock.json
+
+    - name: Build frontend
       if: inputs.amplify-app-id != ''
       shell: bash
+      working-directory: frontend
       env:
         ENVIRONMENT: ${{ inputs.environment }}
-        APP_ID: ${{ inputs.amplify-app-id }}
-        BRANCH: ${{ inputs.amplify-branch }}
         REGION: ${{ inputs.region }}
       run: |
         stack="smart-asset-tracker-$ENVIRONMENT"
@@ -96,15 +106,49 @@ runs:
           aws cloudformation describe-stacks --stack-name "$stack" \
             --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text
         }
-        new=$(jq -n -c \
-          --arg api "$(output ApiUrl)" --arg pool "$(output UserPoolId)" \
-          --arg client "$(output UserPoolClientId)" --arg region "$REGION" \
-          '{VITE_API_URL: $api, VITE_USER_POOL_ID: $pool, VITE_USER_POOL_CLIENT_ID: $client, VITE_AWS_REGION: $region}')
-        # update-branch replaces the whole variable map, so merge into what is already set.
-        existing=$(aws amplify get-branch --app-id "$APP_ID" --branch-name "$BRANCH" \
-          --query 'branch.environmentVariables' --output json)
-        merged=$(jq -c -n --argjson old "${existing:-null}" --argjson new "$new" '($old // {}) + $new')
-        aws amplify update-branch --app-id "$APP_ID" --branch-name "$BRANCH" --environment-variables "$merged" > /dev/null
-        job=$(aws amplify start-job --app-id "$APP_ID" --branch-name "$BRANCH" --job-type RELEASE \
-          --query 'jobSummary.jobId' --output text)
-        echo "Started Amplify job $job for $APP_ID/$BRANCH"
+        # Vite bakes these into the bundle, so they must come from the stack just deployed.
+        export VITE_AWS_REGION="$REGION"
+        VITE_API_URL="$(output ApiUrl)"
+        VITE_USER_POOL_ID="$(output UserPoolId)"
+        VITE_USER_POOL_CLIENT_ID="$(output UserPoolClientId)"
+        export VITE_API_URL VITE_USER_POOL_ID VITE_USER_POOL_CLIENT_ID
+        for name in VITE_API_URL VITE_USER_POOL_ID VITE_USER_POOL_CLIENT_ID; do
+          if [ -z "${!name}" ] || [ "${!name}" = None ]; then
+            echo "::error::Stack output for $name is missing"; exit 1
+          fi
+        done
+        npm ci
+        npm run build
+
+    - name: Publish frontend to Amplify
+      if: inputs.amplify-app-id != ''
+      shell: bash
+      env:
+        APP_ID: ${{ inputs.amplify-app-id }}
+        BRANCH: ${{ inputs.amplify-branch }}
+      run: |
+        if [ -z "$BRANCH" ]; then
+          echo "::error::amplify-branch is required when amplify-app-id is set"; exit 1
+        fi
+        (cd frontend/dist && zip -qr ../site.zip .)
+        read -r job_id upload_url < <(aws amplify create-deployment --app-id "$APP_ID" --branch-name "$BRANCH" \
+          --query '[jobId,zipUploadUrl]' --output text)
+        curl -sS --fail -T frontend/site.zip "$upload_url"
+        aws amplify start-deployment --app-id "$APP_ID" --branch-name "$BRANCH" --job-id "$job_id" > /dev/null
+        echo "Started Amplify deployment $job_id for $APP_ID/$BRANCH"
+
+        # Wait for the result so a broken frontend fails the pipeline (about 10 minutes at most).
+        for _ in $(seq 1 60); do
+          status=$(aws amplify get-job --app-id "$APP_ID" --branch-name "$BRANCH" --job-id "$job_id" \
+            --query 'job.summary.status' --output text)
+          case "$status" in
+            SUCCEED)
+              domain=$(aws amplify get-app --app-id "$APP_ID" --query 'app.defaultDomain' --output text)
+              echo "Frontend published: https://$BRANCH.$domain"
+              exit 0 ;;
+            FAILED|CANCELLED)
+              echo "::error::Amplify deployment $job_id ended with status $status"; exit 1 ;;
+          esac
+          sleep 10
+        done
+        echo "::error::Timed out waiting for Amplify deployment $job_id (last status: $status)"; exit 1

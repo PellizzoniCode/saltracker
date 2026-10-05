@@ -5,8 +5,8 @@ GitHub Actions tests every pull request and deploys to AWS on merge. It signs in
 | Event | Workflow | Result |
 |---|---|---|
 | Pull request to `develop` or `main` | `ci.yml` | Unit tests, `sam validate --lint`, `sam build`, frontend build. No AWS access. |
-| Push to `develop` | `deploy.yml` | Tests, deploy `smart-asset-tracker-dev`, smoke test, rebuild the dev Amplify branch. |
-| Push to `main` | `deploy.yml` | Tests, wait for approval, deploy `smart-asset-tracker-prod`, health check, rebuild the prod Amplify branch. |
+| Push to `develop` | `deploy.yml` | Tests, deploy `smart-asset-tracker-dev`, smoke test, build the frontend and publish it to the dev Amplify app. |
+| Push to `main` | `deploy.yml` | Tests, wait for approval, deploy `smart-asset-tracker-prod`, health check, build the frontend and publish it to the prod Amplify app. |
 
 The shared checks live in `test.yml` and the shared deploy steps in `.github/actions/deploy-stack/`, so dev and prod only differ in the role, variables and approval gate.
 
@@ -44,7 +44,7 @@ aws cloudformation deploy \
 Parameters (add with `--parameter-overrides`):
 
 - `ExistingOidcProviderArn`: set it if the account already has a `token.actions.githubusercontent.com` provider. An account can only have one, and the stack fails if you try to create a second.
-- `AmplifyAppId`: set the real Amplify app id. It defaults to `*`, which lets the deploy roles update any Amplify app in the account.
+- `AmplifyAppId`: set the real Amplify app id. It defaults to `*`, which lets the deploy roles publish to any Amplify app in the account. Set it once the app exists (see [Frontend](#frontend-amplify)).
 - `GitHubSubjectPrefix`: **required if the repo uses GitHub's immutable OIDC subject**, which is the default for newer repositories. Their tokens carry numeric owner and repo ids (`repo:<org>@<owner-id>/<repo>@<repo-id>:...`), so the role trust only matches if you pass that prefix. Read it from the `sub_claim_prefix` field:
 
   ```bash
@@ -73,7 +73,7 @@ Repository settings, Secrets and variables, Actions, **Variables** tab (these ar
 | `SAM_ARTIFACT_BUCKET` | `SamArtifactBucketName` output |
 | `PERMISSIONS_BOUNDARY_ARN` | `LambdaPermissionBoundaryArn` output |
 | `DEV_PHOTO_UPLOAD_ORIGINS` | Optional. Comma-separated origins for the dev stack; blank keeps the template default. |
-| `DEV_AMPLIFY_APP_ID`, `DEV_AMPLIFY_BRANCH` | Optional. Blank skips the dev frontend rebuild. |
+| `DEV_AMPLIFY_APP_ID`, `DEV_AMPLIFY_BRANCH` | Optional. Blank skips publishing the dev frontend. |
 
 Settings, Environments, create **`prod`**:
 
@@ -85,13 +85,49 @@ Settings, Environments, create **`prod`**:
 |---|---|
 | `AWS_ROLE_ARN` | `ProdDeployRoleArn` output |
 | `PHOTO_UPLOAD_ORIGINS` | **Required.** The prod frontend origin, for example `https://main.<id>.amplifyapp.com`. The deploy fails without it so the dev and localhost defaults never reach prod. |
-| `AMPLIFY_APP_ID`, `AMPLIFY_BRANCH` | Optional. Blank skips the prod frontend rebuild. |
+| `AMPLIFY_APP_ID`, `AMPLIFY_BRANCH` | Optional. Blank skips publishing the prod frontend. |
 
 Settings, Branches: protect `develop` and `main`, and require the `CI / test / backend` and `CI / test / frontend` checks, so only tested code can be merged and trigger a deploy.
 
 ## Frontend (Amplify)
 
-The Amplify app itself is still configured by hand and is not in the SAM template. After each backend deploy the pipeline reads `ApiUrl`, `UserPoolId` and `UserPoolClientId` from the stack, merges them with `VITE_AWS_REGION` into the Amplify branch's environment variables (existing variables are kept) and starts a release job. It does not wait for the Amplify build to finish; check the Amplify console for that.
+After each backend deploy the pipeline builds the frontend against the stack it just deployed (`VITE_API_URL`, `VITE_USER_POOL_ID`, `VITE_USER_POOL_CLIENT_ID` and `VITE_AWS_REGION` are read from the stack outputs and baked into the bundle), zips `frontend/dist`, uploads it to Amplify with a manual deployment, and waits for the Amplify job to finish. A failed Amplify deployment fails the pipeline, and the published URL is printed in the log.
+
+Amplify is not in the SAM template. This works only with a **manual-deploy** Amplify app, one created without a Git repository. An app connected to Git does not accept manual deployments, and it would also build the site itself without the stack's values. Skipping the frontend is safe: leave the `*_AMPLIFY_APP_ID` variable blank.
+
+### One-time setup per environment (dev shown; repeat for prod)
+
+1. Create the app and a branch (administrator, once):
+
+   ```bash
+   aws amplify create-app --region us-east-1 --name saltracker-dev --query 'app.appId' --output text
+   ```
+
+   ```bash
+   aws amplify create-branch --region us-east-1 --app-id <APP_ID> --branch-name dev
+   ```
+
+2. The site will be served at `https://dev.<APP_ID>.amplifyapp.com`. Photo uploads go straight from the browser to S3, so that origin must be allowed by the bucket CORS rules. Set the variable (keep localhost if you also run the frontend locally):
+
+   ```bash
+   gh variable set DEV_PHOTO_UPLOAD_ORIGINS --body "https://dev.<APP_ID>.amplifyapp.com,http://localhost:5173"
+   ```
+
+3. Tell the pipeline which app to publish to:
+
+   ```bash
+   gh variable set DEV_AMPLIFY_APP_ID --body "<APP_ID>"
+   ```
+
+   ```bash
+   gh variable set DEV_AMPLIFY_BRANCH --body "dev"
+   ```
+
+4. Redeploy the bootstrap stack with `AmplifyAppId=<APP_ID>` added to `--parameter-overrides`, so the deploy role can publish to that app only. Redeploy once after changing `ci-bootstrap.yaml` too, because the publish permissions changed.
+
+5. Push to the deploy branch (or re-run the workflow). The dev deploy now ends with the frontend published.
+
+For prod, create a separate app and branch (for example `saltracker-prod` and `main`), and set `AMPLIFY_APP_ID`, `AMPLIFY_BRANCH` and `PHOTO_UPLOAD_ORIGINS` on the `prod` GitHub Environment. The bootstrap `AmplifyAppId` parameter holds a single app id and is shared by both roles, so leave it `*` or extend the template to take one id per environment once both apps exist.
 
 ## Day-to-day
 
