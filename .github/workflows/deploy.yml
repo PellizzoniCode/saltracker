@@ -4,7 +4,9 @@ name: Deploy
 # GitHub Environment). Credentials come from GitHub OIDC; see docs/ci-cd.md.
 on:
   push:
-    branches: [develop, main]
+    # TEMPORARY: feature/ci-cd-aws-deploy deploys dev so the pipeline can be tested from the PR.
+    # Remove it (and the matching condition on deploy-dev) before merging.
+    branches: [develop, main, feature/ci-cd-aws-deploy]
 
 permissions:
   contents: read
@@ -19,7 +21,9 @@ jobs:
     uses: ./.github/workflows/test.yml
 
   deploy-dev:
-    if: github.ref == 'refs/heads/develop'
+    # TEMPORARY: the feature-branch half of this condition is for testing only. The dev role
+    # must be bootstrapped with DevBranch=feature/ci-cd-aws-deploy for it to be accepted.
+    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/feature/ci-cd-aws-deploy'
     needs: test
     runs-on: ubuntu-latest
     # No `environment:` here on purpose: it would change the OIDC subject to
