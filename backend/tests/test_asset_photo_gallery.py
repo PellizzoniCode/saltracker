@@ -84,6 +84,31 @@ class AssetPhotoGalleryTests(unittest.TestCase):
             ExpiresIn=300,
         )
 
+    def test_missing_asset_returns_not_found(self):
+        self.table.get_item.return_value = {}
+
+        result = self.call_photo({"sub": "admin-1"}, {"Administrator"})
+
+        self.assertEqual(result["statusCode"], 404)
+        self.s3.generate_presigned_url.assert_not_called()
+
+    def test_auditor_can_view_any_asset_photo(self):
+        self.table.get_item.side_effect = [{"Item": self.asset}, {"Item": self.analysis}]
+
+        result = self.call_photo({"sub": "auditor-1"}, {"Auditor"})
+
+        self.assertEqual(result["statusCode"], 200)
+
+    def test_manager_can_view_same_department_photo(self):
+        self.table.get_item.side_effect = [{"Item": self.asset}, {"Item": self.analysis}]
+
+        result = self.call_photo(
+            {"sub": "manager-1", "custom:department": "IT"},
+            {"Manager"},
+        )
+
+        self.assertEqual(result["statusCode"], 200)
+
     def test_manager_cannot_view_other_department_photo(self):
         self.table.get_item.return_value = {"Item": self.asset}
 
