@@ -9,10 +9,10 @@ Description: >-
 Parameters:
   GitHubOrg:
     Type: String
-    Default: PellizzoniCode
+    Description: GitHub user or organisation that owns the repository.
   GitHubRepo:
     Type: String
-    Default: saltracker
+    Description: Repository name; only this repository's workflows can assume the deploy roles.
   GitHubSubjectPrefix:
     Type: String
     Default: ''

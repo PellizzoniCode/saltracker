@@ -35,9 +35,8 @@ jobs:
       - uses: ./.github/actions/deploy-stack
         with:
           environment: dev
-          role-arn: ${{ vars.AWS_DEV_ROLE_ARN }}
-          artifact-bucket: ${{ vars.SAM_ARTIFACT_BUCKET }}
-          permissions-boundary-arn: ${{ vars.PERMISSIONS_BOUNDARY_ARN }}
+          account-id: ${{ secrets.AWS_ACCOUNT_ID }}
+          region: ${{ vars.AWS_REGION || 'us-east-1' }}
           photo-upload-origins: ${{ vars.DEV_PHOTO_UPLOAD_ORIGINS }}
           amplify-app-id: ${{ vars.DEV_AMPLIFY_APP_ID }}
           amplify-branch: ${{ vars.DEV_AMPLIFY_BRANCH }}
@@ -55,8 +54,9 @@ jobs:
           python-version: "3.11"
       - uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: ${{ vars.AWS_DEV_ROLE_ARN }}
-          aws-region: us-east-1
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/saltracker-deploy-dev
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          mask-aws-account-id: true
       - name: Smoke test
         run: python scripts/smoke_test.py --env dev --output smoke-test-results.md
       - name: Add report to the run summary
