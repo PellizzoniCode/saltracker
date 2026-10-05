@@ -59,6 +59,7 @@ API, table, Lambda functions, and photo bucket. The helper accepts only `dev` an
 | `bash scripts/dev.sh seed` | Add sample assets through the deployed asset Lambda |
 | `bash scripts/dev.sh sync` | Run `sam sync --watch` for Lambda iteration |
 | `bash scripts/dev.sh web` | Run `npm ci` and start the Vite dev server |
+| `bash scripts/dev.sh smoke` | Smoke-test the deployed stack and write `smoke-test-results.md` |
 | `bash scripts/dev.sh down` | Delete the chosen stack |
 | `bash scripts/dev.sh down --purge` | Delete the stack and its retained DynamoDB table |
 

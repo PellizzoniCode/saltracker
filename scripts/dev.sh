@@ -26,6 +26,7 @@ Usage: scripts/dev.sh COMMAND [options]
   deploy                 Deploy the built SAM application without prompts
   test                   Run backend unit tests
   build                  Validate and build the SAM application
+  smoke [options]        Smoke-test the deployed stack (see scripts/smoke_test.py --help)
   down [--purge]         Delete the stack; --purge also deletes its retained table
   help                   Show this help
 
@@ -144,6 +145,7 @@ case "$command" in
   env) write_env ;;
   seed) run_seed ;;
   up) run_tests; run_build; run_deploy; write_env; run_seed ;;
+  smoke) need aws; need python3; python3 scripts/smoke_test.py --env "$ENVIRONMENT" --region "$AWS_REGION" "$@" ;;
   sync)
     need sam
     sam sync --watch --template-file infrastructure/template.yaml --stack-name "$STACK" \
