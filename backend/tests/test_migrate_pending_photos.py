@@ -3,7 +3,7 @@
 import importlib.util
 import pathlib
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 
 SCRIPT = pathlib.Path(__file__).parents[2] / "scripts" / "migrate_pending_photos.py"
@@ -97,6 +97,38 @@ class MigratePendingPhotosTests(unittest.TestCase):
 
         self.assertEqual(result["migrated"], [("AST-1", "pending/u/a.jpg")])
         self.assertEqual(result["failed"], [])
+
+
+class VerifyGateTests(unittest.TestCase):
+    def _main(self, items, *flags):
+        boto3 = MagicMock(name="boto3")
+        table = boto3.resource.return_value.Table.return_value
+        table.scan.return_value = {"Items": items}
+        with patch.dict("sys.modules", {"boto3": boto3}), patch("builtins.print"):
+            code = migrate_script.main(["--table", "t", "--bucket", "b", *flags])
+        return code, table, boto3.client.return_value
+
+    def test_verify_fails_while_pending_references_remain(self):
+        code, table, s3 = self._main([_item("AST-1", "pending/u/a.jpg")], "--verify")
+
+        self.assertEqual(code, 1)
+        table.update_item.assert_not_called()
+        s3.copy_object.assert_not_called()
+
+    def test_verify_passes_when_no_pending_references_remain(self):
+        code, _, _ = self._main([], "--verify")
+
+        self.assertEqual(code, 0)
+
+    def test_plain_dry_run_still_exits_zero_with_pending_references(self):
+        code, _, _ = self._main([_item("AST-1", "pending/u/a.jpg")])
+
+        self.assertEqual(code, 0)
+
+    def test_verify_and_apply_are_mutually_exclusive(self):
+        with patch.dict("sys.modules", {"boto3": MagicMock()}), patch("sys.stderr"):
+            with self.assertRaises(SystemExit):
+                migrate_script.main(["--table", "t", "--bucket", "b", "--verify", "--apply"])
 
 
 if __name__ == "__main__":

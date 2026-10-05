@@ -17,6 +17,15 @@ Parameters:
     Type: String
     Default: ''
     Description: Optional email address for maintenance alerts
+  PendingUploadExpiration:
+    Type: String
+    Default: Disabled
+    AllowedValues: [Enabled, Disabled]
+    Description: >-
+      Whether the S3 lifecycle rule that expires pending/ photos after 7 days
+      is active. Keep Disabled on an existing environment until
+      scripts/migrate_pending_photos.py --verify passes, then redeploy with
+      Enabled (see docs/photo-storage-migration.md).
 
 Conditions:
   HasAlertEmail: !Not [!Equals [!Ref AlertEmail, '']]
@@ -121,7 +130,7 @@ Resources:
       LifecycleConfiguration:
         Rules:
           - Id: ExpireUnclaimedPendingUploads
-            Status: Enabled
+            Status: !Ref PendingUploadExpiration
             Prefix: pending/
             ExpirationInDays: 7
 
@@ -519,38 +528,56 @@ Resources:
       Protocol: email
       Endpoint: !Ref AlertEmail
 
+  # Lambda auto-creates /aws/lambda/<function> on first invoke, so an existing
+  # environment already has these groups. Do NOT delete them to make room for
+  # this template: import them into the stack instead, which keeps their logs
+  # (see "Migrating an existing deployment" in docs/cloudwatch-monitoring.md).
+  # Retain keeps logs when the stack or a resource is deleted/replaced, and is
+  # required for CloudFormation resource import.
   AssetApiLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       LogGroupName: !Sub /aws/lambda/smart-asset-api-${Environment}
       RetentionInDays: 30
 
   HealthLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       LogGroupName: !Sub /aws/lambda/smart-asset-health-${Environment}
       RetentionInDays: 14
 
   PhotoUploadLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       LogGroupName: !Sub /aws/lambda/smart-asset-photo-upload-${Environment}
       RetentionInDays: 14
 
   PhotoAnalysisLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       LogGroupName: !Sub /aws/lambda/smart-asset-photo-analysis-${Environment}
       RetentionInDays: 30
 
   PhotoAnalysisApiLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       LogGroupName: !Sub /aws/lambda/smart-asset-photo-analysis-api-${Environment}
       RetentionInDays: 14
 
   MaintenanceSchedulerLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       LogGroupName: !Sub /aws/lambda/smart-asset-maintenance-scheduler-${Environment}
       RetentionInDays: 30

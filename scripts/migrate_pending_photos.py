@@ -3,12 +3,16 @@
 
 The S3 lifecycle rule expires everything under pending/ after 7 days. Assets
 saved before the API started claiming photos still point at pending/ keys, so
-run this BEFORE deploying the lifecycle rule to an environment.
+run this BEFORE enabling the lifecycle rule (PendingUploadExpiration=Enabled)
+in an environment.
 
-Dry-run by default; pass --apply to make changes. Safe to re-run.
+Dry-run by default; pass --apply to make changes. Safe to re-run. Pass --verify
+(read-only) as the gate before enabling expiration: it exits non-zero while any
+asset still references pending/.
 
     python scripts/migrate_pending_photos.py --table <table> --bucket <bucket>
     python scripts/migrate_pending_photos.py --table <table> --bucket <bucket> --apply
+    python scripts/migrate_pending_photos.py --table <table> --bucket <bucket> --verify
 """
 
 import argparse
@@ -98,7 +102,13 @@ def main(argv=None):
     parser.add_argument("--table", required=True, help="DynamoDB asset table name")
     parser.add_argument("--bucket", required=True, help="S3 photo bucket name")
     parser.add_argument("--region", default="us-east-1")
-    parser.add_argument("--apply", action="store_true", help="make changes (default is a dry run)")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--apply", action="store_true", help="make changes (default is a dry run)")
+    mode.add_argument(
+        "--verify",
+        action="store_true",
+        help="read-only gate: exit 1 if any asset still references pending/",
+    )
     args = parser.parse_args(argv)
 
     import boto3  # imported here so the migration logic can be tested without it
@@ -118,6 +128,10 @@ def main(argv=None):
     print(f"failed: {len(result['failed'])}")
     for asset_id, key, reason in result["failed"]:
         print(f"  {asset_id}  {key}  ({reason})")
+    if args.verify:
+        remaining = len(result["migrated"])
+        print(f"verify: {remaining} asset(s) still reference {PENDING_PREFIX}")
+        return 1 if remaining else 0
     if not args.apply:
         print("Dry run only. Re-run with --apply to make changes.")
     return 1 if result["failed"] else 0
