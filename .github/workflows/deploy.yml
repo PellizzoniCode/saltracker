@@ -1,17 +1,19 @@
 name: Deploy
 
-# develop -> dev stack, main -> prod stack (after a reviewer approves the `prod`
-# GitHub Environment). Credentials come from GitHub OIDC; see docs/ci-cd.md.
+# A merge (push) to develop deploys the dev stack, runs the smoke test and
+# publishes the frontend. Credentials come from GitHub OIDC; see docs/ci-cd.md.
+#
+# Production is not deployed from here yet. The prod job (GitHub Environment with
+# required reviewers, then a health check) is in git history at 5137944 and is
+# described in docs/ci-cd.md under "Enabling prod".
 on:
   push:
-    # TEMPORARY: feature/ci-cd-aws-deploy deploys dev so the pipeline can be tested from the PR.
-    # Remove it (and the matching condition on deploy-dev) before merging.
-    branches: [develop, main, feature/ci-cd-aws-deploy]
+    branches: [develop]
 
 permissions:
   contents: read
 
-# One deploy per branch at a time; a queued run waits instead of cancelling a deploy mid-flight.
+# One deploy at a time; a queued run waits instead of cancelling a deploy mid-flight.
 concurrency:
   group: deploy-${{ github.ref_name }}
   cancel-in-progress: false
@@ -21,9 +23,6 @@ jobs:
     uses: ./.github/workflows/test.yml
 
   deploy-dev:
-    # TEMPORARY: the feature-branch half of this condition is for testing only. The dev role
-    # must be bootstrapped with DevBranch=feature/ci-cd-aws-deploy for it to be accepted.
-    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/feature/ci-cd-aws-deploy'
     needs: test
     runs-on: ubuntu-latest
     # No `environment:` here on purpose: it would change the OIDC subject to
@@ -69,35 +68,3 @@ jobs:
           name: smoke-test-results
           path: smoke-test-results.md
           if-no-files-found: ignore
-
-  deploy-prod:
-    if: github.ref == 'refs/heads/main'
-    needs: test
-    runs-on: ubuntu-latest
-    # Required reviewers on this Environment gate the run, and the prod role only
-    # trusts tokens issued for it, so no approval means no credentials.
-    environment: prod
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/deploy-stack
-        with:
-          environment: prod
-          role-arn: ${{ vars.AWS_ROLE_ARN }}
-          artifact-bucket: ${{ vars.SAM_ARTIFACT_BUCKET }}
-          permissions-boundary-arn: ${{ vars.PERMISSIONS_BOUNDARY_ARN }}
-          photo-upload-origins: ${{ vars.PHOTO_UPLOAD_ORIGINS }}
-          amplify-app-id: ${{ vars.AMPLIFY_APP_ID }}
-          amplify-branch: ${{ vars.AMPLIFY_BRANCH }}
-      # The smoke test is dev/test only, so prod gets a read-only liveness check.
-      - name: Health check
-        run: |
-          aws lambda invoke --function-name smart-asset-health-prod \
-            --cli-binary-format raw-in-base64-out --payload '{}' health.json > invoke.json
-          cat health.json
-          if jq -e '.FunctionError' invoke.json > /dev/null; then
-            echo "::error::Health Lambda returned an error"; exit 1
-          fi
-          jq -e '.statusCode == 200 and (.body | fromjson | .status == "UP")' health.json > /dev/null

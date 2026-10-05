@@ -90,7 +90,7 @@ photo bucket and its contents must be removed separately if no longer needed.
 
 ## Automated deploys (CI/CD)
 
-Pushes to `develop` deploy the dev stack and pushes to `main` deploy prod (after a reviewer approves), using GitHub Actions with OIDC, so no AWS keys are stored. One-time setup and rollback steps are in [docs/ci-cd.md](docs/ci-cd.md).
+Merging to `develop` deploys the dev stack and publishes the frontend to Amplify, using GitHub Actions with OIDC, so no AWS keys are stored. Production is not deployed automatically yet. One-time setup and rollback steps are in [docs/ci-cd.md](docs/ci-cd.md).
 
 ## Run the frontend
 

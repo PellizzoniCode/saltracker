@@ -5,10 +5,11 @@ GitHub Actions tests every pull request and deploys to AWS on merge. It signs in
 | Event | Workflow | Result |
 |---|---|---|
 | Pull request to `develop` or `main` | `ci.yml` | Unit tests, `sam validate --lint`, `sam build`, frontend build. No AWS access. |
-| Push to `develop` | `deploy.yml` | Tests, deploy `smart-asset-tracker-dev`, smoke test, build the frontend and publish it to the dev Amplify app. |
-| Push to `main` | `deploy.yml` | Tests, wait for approval, deploy `smart-asset-tracker-prod`, health check, build the frontend and publish it to the prod Amplify app. |
+| Push to `develop` (a merged PR counts) | `deploy.yml` | Tests, deploy `smart-asset-tracker-dev`, smoke test, build the frontend and publish it to the dev Amplify app. |
 
-The shared checks live in `test.yml` and the shared deploy steps in `.github/actions/deploy-stack/`, so dev and prod only differ in the role, variables and approval gate.
+**Production is not deployed yet.** Nothing in the workflows touches `smart-asset-tracker-prod`; see [Enabling prod](#enabling-prod) for what turning it on involves.
+
+The shared checks live in `test.yml` and the shared deploy steps in `.github/actions/deploy-stack/`, so enabling prod later only needs a role, variables and an approval gate.
 
 ## How the AWS sign-in works
 
@@ -19,7 +20,7 @@ The shared checks live in `test.yml` and the shared deploy steps in `.github/act
 | Role | Trusted token subject | Effect |
 |---|---|---|
 | `saltracker-deploy-dev` | `<prefix>:ref:refs/heads/develop` | Only pushes to `develop`. |
-| `saltracker-deploy-prod` | `<prefix>:environment:prod` | Only jobs in the `prod` GitHub Environment, which waits for a reviewer. |
+| `saltracker-deploy-prod` | `<prefix>:environment:prod` | Only jobs in the `prod` GitHub Environment. **Not used yet**, see [Enabling prod](#enabling-prod). |
 
 `<prefix>` is `repo:PellizzoniCode/saltracker` in the classic format, or `repo:PellizzoniCode@191217257/saltracker@1367469052` with GitHub's immutable subject (this repo). It is set by the `GitHubSubjectPrefix` parameter below.
 
@@ -75,19 +76,9 @@ Repository settings, Secrets and variables, Actions, **Variables** tab (these ar
 | `DEV_PHOTO_UPLOAD_ORIGINS` | Optional. Comma-separated origins for the dev stack; blank keeps the template default. |
 | `DEV_AMPLIFY_APP_ID`, `DEV_AMPLIFY_BRANCH` | Optional. Blank skips publishing the dev frontend. |
 
-Settings, Environments, create **`prod`**:
+Settings, Branches: protect `develop` and require the `CI / test / backend` and `CI / test / frontend` checks, so only tested code can be merged and trigger a deploy.
 
-- Add **required reviewers**. This is what holds the prod credentials back until someone approves.
-- Restrict deployment branches to `main`.
-- Add these environment variables:
-
-| Variable | Value |
-|---|---|
-| `AWS_ROLE_ARN` | `ProdDeployRoleArn` output |
-| `PHOTO_UPLOAD_ORIGINS` | **Required.** The prod frontend origin, for example `https://main.<id>.amplifyapp.com`. The deploy fails without it so the dev and localhost defaults never reach prod. |
-| `AMPLIFY_APP_ID`, `AMPLIFY_BRANCH` | Optional. Blank skips publishing the prod frontend. |
-
-Settings, Branches: protect `develop` and `main`, and require the `CI / test / backend` and `CI / test / frontend` checks, so only tested code can be merged and trigger a deploy.
+The dev role trusts pushes to `develop` (the bootstrap `DevBranch` parameter, default `develop`). To test the pipeline from a feature branch you would have to redeploy the bootstrap stack with `DevBranch=<that branch>` and temporarily add the branch to `deploy.yml`; set it back afterwards, because the role accepts that branch's code with no review.
 
 ## Frontend (Amplify)
 
@@ -95,7 +86,7 @@ After each backend deploy the pipeline builds the frontend against the stack it 
 
 Amplify is not in the SAM template. This works only with a **manual-deploy** Amplify app, one created without a Git repository. An app connected to Git does not accept manual deployments, and it would also build the site itself without the stack's values. Skipping the frontend is safe: leave the `*_AMPLIFY_APP_ID` variable blank.
 
-### One-time setup per environment (dev shown; repeat for prod)
+### One-time setup (dev)
 
 1. Create the app and a branch (administrator, once):
 
@@ -125,23 +116,31 @@ Amplify is not in the SAM template. This works only with a **manual-deploy** Amp
 
 4. Redeploy the bootstrap stack with `AmplifyAppId=<APP_ID>` added to `--parameter-overrides`, so the deploy role can publish to that app only. Redeploy once after changing `ci-bootstrap.yaml` too, because the publish permissions changed.
 
-5. Push to the deploy branch (or re-run the workflow). The dev deploy now ends with the frontend published.
+5. Merge to `develop` (or re-run the workflow). The dev deploy now ends with the frontend published.
 
-For prod, create a separate app and branch (for example `saltracker-prod` and `main`), and set `AMPLIFY_APP_ID`, `AMPLIFY_BRANCH` and `PHOTO_UPLOAD_ORIGINS` on the `prod` GitHub Environment. The bootstrap `AmplifyAppId` parameter holds a single app id and is shared by both roles, so leave it `*` or extend the template to take one id per environment once both apps exist.
+Prod would need its own Amplify app and branch; see [Enabling prod](#enabling-prod).
 
 ## Day-to-day
 
 - Merge a PR into `develop`: the dev stack redeploys and the smoke test runs. The report appears on the run summary and as the `smoke-test-results` artifact.
-- Release: merge `develop` into `main`, then approve the `prod` deployment on the run page.
+- There is no automated release to prod yet.
 
 ## Rollback
 
 CloudFormation rolls a failed update back automatically and the job fails. To roll back a deploy that succeeded but is wrong, revert the commit on the branch; the pipeline redeploys the previous code. DynamoDB, the photo bucket and the log groups are `Retain`, so data survives a stack replacement.
 
-## First prod deploy: manual steps the pipeline does not do
+## Enabling prod
 
-- If the environment already has CloudWatch log groups, import them first (see [cloudwatch-monitoring.md](cloudwatch-monitoring.md)), or the deploy fails with "log group already exists".
-- `PendingUploadExpiration` stays `Disabled` until the photo migration is verified (see [photo-storage-migration.md](photo-storage-migration.md)).
+Not done yet. The bootstrap stack already creates the `saltracker-deploy-prod` role, and the previous `deploy-prod` job (with its health check) is in git history at commit `5137944`. To turn prod on:
+
+1. In GitHub, Settings, Environments, create **`prod`** with **required reviewers** and restrict deployment branches to `main`. The role trusts any job that declares `environment: prod`, so these reviewers are the only gate; create the Environment with them before anything uses the role.
+2. Add these environment variables: `AWS_ROLE_ARN` (the `ProdDeployRoleArn` output), **`PHOTO_UPLOAD_ORIGINS`** (required: the prod frontend origin, so the dev and localhost defaults never reach prod) and optionally `AMPLIFY_APP_ID` and `AMPLIFY_BRANCH` for a separate manual-deploy Amplify app.
+3. Restore the `deploy-prod` job and add `main` to the push trigger in `deploy.yml`.
+4. Prepare the environment by hand first, because the pipeline does not:
+   - If it already has CloudWatch log groups, import them (see [cloudwatch-monitoring.md](cloudwatch-monitoring.md)), or the deploy fails with "log group already exists".
+   - `PendingUploadExpiration` stays `Disabled` until the photo migration is verified (see [photo-storage-migration.md](photo-storage-migration.md)).
+   - The first deploy that adds the permission boundary to existing Lambda roles can fail on rollback, because the deploy role is not allowed to remove the boundary. A new prod stack is not affected.
+5. The bootstrap `AmplifyAppId` parameter holds one app id shared by both roles; leave it `*` or extend the template to take one id per environment.
 
 ## Tightening permissions
 
