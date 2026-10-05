@@ -27,6 +27,9 @@ import uuid
 import zlib
 from datetime import datetime, timezone
 
+SAMPLE_PHOTO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                            "sample-data", "images", "dell-latitude-5420-demo.jpg")
+
 LOG_PATTERN = '?AccessDenied ?AccessDeniedException ?AuthorizationError ?"is not authorized"'
 
 
@@ -439,10 +442,14 @@ def main():
     parser.add_argument("--stack", default=os.environ.get("STACK_NAME"),
                         help="Stack name (default: smart-asset-tracker-<env>)")
     parser.add_argument("--region", default=os.environ.get("AWS_REGION", "us-east-1"))
-    parser.add_argument("--image", help="JPEG or PNG asset photo to upload (default: a generated PNG)")
+    parser.add_argument("--image", help="JPEG or PNG asset photo to upload (default: the sample laptop photo)")
     parser.add_argument("--output", default="smoke-test-results.md", help="Markdown report path")
     parser.add_argument("--keep", action="store_true", help="Keep the smoke asset, photo and analysis")
     args = parser.parse_args()
+    if args.image and not os.path.isfile(args.image):
+        parser.error(f"--image file not found: {args.image}")
+    if not args.image and os.path.isfile(SAMPLE_PHOTO):
+        args.image = os.path.normpath(SAMPLE_PHOTO)
 
     test = SmokeTest(args.env, args.region, args.image, args.stack)
     try:
