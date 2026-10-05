@@ -17,6 +17,7 @@ const emptyAsset = {
   salvageValue: "0.00",
   usefulLifeMonths: 48,
   department: "",
+  location: "",
   assignedUserId: "",
   condition: "Good",
   status: "Available",
@@ -33,6 +34,10 @@ async function api(path, options = {}) {
   const body = await result.json();
   if (!result.ok) throw new Error(body.message || "Request failed");
   return body;
+}
+
+function formatMoney(value) {
+  return value === undefined || value === null ? "—" : `$${value}`;
 }
 
 const emptyMaintenance = {
@@ -232,27 +237,78 @@ function MaintenancePage({
           </div>
 
           <div>
+            <dt>Location</dt>
+            <dd>{asset.location || "—"}</dd>
+          </div>
+
+          <div>
             <dt>In-service date</dt>
             <dd>{asset.inServiceDate || "—"}</dd>
           </div>
-
-          <div>
-            <dt>Current book value</dt>
-            <dd>
-              {asset.depreciation?.currentBookValue
-                ? `$${asset.depreciation.currentBookValue}`
-                : "—"}
-            </dd>
-          </div>
-
-          <div>
-            <dt>Replacement date</dt>
-            <dd>
-              {asset.depreciation
-                ?.estimatedReplacementDate || "—"}
-            </dd>
-          </div>
         </dl>
+      </section>
+
+      <section className="panel">
+        <h2>Depreciation</h2>
+
+        {asset.depreciation ? (
+          <dl className="asset-summary">
+            <div>
+              <dt>Original purchase value</dt>
+              <dd>
+                {formatMoney(
+                  asset.depreciation.originalPurchaseValue
+                )}
+              </dd>
+            </div>
+
+            <div>
+              <dt>Annual depreciation</dt>
+              <dd>
+                {formatMoney(
+                  asset.depreciation.annualDepreciation
+                )}
+              </dd>
+            </div>
+
+            <div>
+              <dt>Accumulated depreciation</dt>
+              <dd>
+                {formatMoney(
+                  asset.depreciation.accumulatedDepreciation
+                )}
+              </dd>
+            </div>
+
+            <div>
+              <dt>Current book value</dt>
+              <dd>
+                {formatMoney(
+                  asset.depreciation.currentBookValue
+                )}
+              </dd>
+            </div>
+
+            <div>
+              <dt>Useful life consumed</dt>
+              <dd>
+                {`${asset.depreciation.usefulLifeConsumedPercent}%`}
+              </dd>
+            </div>
+
+            <div>
+              <dt>Estimated replacement date</dt>
+              <dd>
+                {asset.depreciation.estimatedReplacementDate}
+              </dd>
+            </div>
+          </dl>
+        ) : (
+          <p>
+            Depreciation is unavailable because the asset is
+            missing financial or in-service information.
+          </p>
+        )}
       </section>
 
       <section className="maintenance-grid">
@@ -1106,6 +1162,7 @@ if (maintenanceAsset) {
       <th>Category</th>
       <th>Description</th>
       <th>Department</th>
+      <th>Location</th>
       <th>Status</th>
       <th>Maintenance</th>
     </tr>
@@ -1118,6 +1175,7 @@ if (maintenanceAsset) {
         <td>{asset.category}</td>
         <td>{asset.description}</td>
         <td>{asset.department || "—"}</td>
+        <td>{asset.location || "—"}</td>
         <td>
           <span className="status">
             {asset.status}
