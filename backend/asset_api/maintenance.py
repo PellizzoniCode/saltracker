@@ -69,6 +69,12 @@ def _cost(payload):
             ["cost"],
         ) from exc
 
+    if not amount.is_finite():
+        raise MaintenanceValidationError(
+            "cost must be a valid number.",
+            ["cost"],
+        )
+
     if amount < 0:
         raise MaintenanceValidationError(
             "cost cannot be negative.",

@@ -225,7 +225,7 @@ Resources:
           CognitoAuthorizer:
             UserPoolArn: !GetAtt UserPool.Arn
       Cors:
-        AllowMethods: "'GET,POST,PUT,OPTIONS'"
+        AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
         AllowHeaders: "'Content-Type,Authorization'"
         AllowOrigin: "'*'"
       GatewayResponses:
@@ -347,6 +347,18 @@ Resources:
             RestApiId: !Ref AssetApi
             Path: /assets/{assetId}/maintenance
             Method: GET
+        UpdateMaintenance:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AssetApi
+            Path: /assets/{assetId}/maintenance/{maintenanceId}
+            Method: PUT
+        DeleteMaintenance:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AssetApi
+            Path: /assets/{assetId}/maintenance/{maintenanceId}
+            Method: DELETE
         GenerateMaintenanceRecommendation:
           Type: Api
           Properties:
