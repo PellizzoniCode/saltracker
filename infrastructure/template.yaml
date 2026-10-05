@@ -498,9 +498,13 @@ Resources:
             Description: Daily asset maintenance and cleaning check
             Schedule: cron(0 13 * * ? *)
             Enabled: true
+            # RetryPolicy covers EventBridge-to-Lambda delivery only. Events that
+            # still cannot be delivered land in the dead-letter queue.
             RetryPolicy:
               MaximumRetryAttempts: 2
               MaximumEventAgeInSeconds: 3600
+            DeadLetterConfig:
+              Type: SQS
   HealthFunction:
     Type: AWS::Serverless::Function
     Properties:
