@@ -753,6 +753,8 @@ function AssetApplication({ signOut, user }) {
   const [analysisMessage, setAnalysisMessage] = useState("");
   const [checkingAnalysis, setCheckingAnalysis] = useState(false);
   const analysisTimer = useRef(null);
+  const activePhotoKey = useRef(null);
+  const uploadToken = useRef(0);
 
   const loadAssets = useCallback(async ({
     append = false,
@@ -858,6 +860,8 @@ function AssetApplication({ signOut, user }) {
     analysisTimer.current = null;
   }
 
+  activePhotoKey.current = null;
+  uploadToken.current += 1;
   setPhoto(selected);
   setForm((current) => ({ ...current, imageKey: "" }));
   setPhotoMessage("");
@@ -867,6 +871,8 @@ function AssetApplication({ signOut, user }) {
 }
 
   async function checkPhotoAnalysis(photoKey, attempt = 0) {
+  if (activePhotoKey.current !== photoKey) return;
+
   if (attempt === 0) {
     setCheckingAnalysis(true);
     setAnalysis(null);
@@ -876,6 +882,8 @@ function AssetApplication({ signOut, user }) {
     const result = await api(
       `/photo-analysis?key=${encodeURIComponent(photoKey)}`
     );
+
+    if (activePhotoKey.current !== photoKey) return;
 
     if (result.status === "Processing") {
       if (attempt >= 30) {
@@ -909,6 +917,7 @@ function AssetApplication({ signOut, user }) {
     );
     setCheckingAnalysis(false);
   } catch (error) {
+    if (activePhotoKey.current !== photoKey) return;
     setAnalysisMessage(error.message);
     setCheckingAnalysis(false);
   }
@@ -916,6 +925,8 @@ function AssetApplication({ signOut, user }) {
 
     async function uploadPhoto() {
   if (!photo || uploading || saving) return;
+
+  const token = uploadToken.current;
 
   if (
     !["image/jpeg", "image/png"].includes(photo.type) ||
@@ -941,6 +952,8 @@ function AssetApplication({ signOut, user }) {
       }),
     });
 
+    if (uploadToken.current !== token) return;
+
     const data = new FormData();
 
     Object.entries(signed.fields).forEach(
@@ -960,6 +973,8 @@ function AssetApplication({ signOut, user }) {
       );
     }
 
+    if (uploadToken.current !== token) return;
+
     setForm((current) => ({
       ...current,
       imageKey: signed.key,
@@ -969,6 +984,7 @@ function AssetApplication({ signOut, user }) {
       "Photo uploaded privately. Bedrock analysis has started."
     );
 
+    activePhotoKey.current = signed.key;
     await checkPhotoAnalysis(signed.key);
   } catch (error) {
     setPhotoMessage(error.message);
@@ -985,6 +1001,8 @@ function applyAnalysis() {
     category: analysis.category || current.category,
     description: analysis.description || current.description,
     condition: analysis.condition || current.condition,
+    manufacturer: analysis.manufacturer || current.manufacturer,
+    model: analysis.model || current.model,
     usefulLifeMonths:
       analysis.usefulLifeMonths !== undefined
         ? Number(analysis.usefulLifeMonths)
@@ -1020,6 +1038,7 @@ function rejectAnalysis() {
       setAnalysis(null);
 setAnalysisMessage("");
 setCheckingAnalysis(false);
+activePhotoKey.current = null;
 
 if (analysisTimer.current) {
   clearTimeout(analysisTimer.current);
@@ -1103,6 +1122,12 @@ if (maintenanceAsset) {
 
       <dt>Condition</dt>
       <dd>{analysis.condition || "—"}</dd>
+
+      <dt>Manufacturer</dt>
+      <dd>{analysis.manufacturer || "—"}</dd>
+
+      <dt>Model</dt>
+      <dd>{analysis.model || "—"}</dd>
 
       <dt>Useful life</dt>
       <dd>

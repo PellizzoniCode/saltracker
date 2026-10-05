@@ -42,6 +42,7 @@ class SmokeTest:
         self.asset_id = None
         self.tags = []
         self.photo_key = None
+        self.claimed_key = None
         self.functions = {
             "api": f"smart-asset-api-{env}",
             "upload": f"smart-asset-photo-upload-{env}",
@@ -141,7 +142,8 @@ class SmokeTest:
             self.step("Photo", "Presigned POST over HTTPS accepted", self.check_upload)
             self.step("Photo", "Presigned POST over HTTP denied by bucket policy", self.check_upload_http_denied)
             self.step("Photo", "Analysis completes (S3 read, Bedrock, DynamoDB)", self.check_analysis)
-            self.step("Photo", "Asset photo view (presigned GET over HTTPS)", self.check_photo_view)
+            self.step("Photo", "Photo claimed on save and viewable (copy, delete, presigned GET)",
+                  self.check_photo_view)
             self.step("Photo", "Presigned GET over HTTP denied by bucket policy", self.check_photo_http_denied)
         self.step("Maintenance", "Record created (PutItem)", self.check_maintenance_create)
         self.step("Maintenance", "Record moved to a new date (TransactWriteItems with Delete)",
@@ -247,13 +249,22 @@ class SmokeTest:
                                 {"imageKey": self.photo_key}, path={"assetId": self.asset_id})
         if status != 200:
             return False, f"attach photo HTTP {status} {body}"
+        self.claimed_key = "claimed/" + self.photo_key[len("pending/"):]
+        status, body = self.api("api", "GET", "/assets/{assetId}", self.claims("Administrator"),
+                                path={"assetId": self.asset_id})
+        if body.get("imageKey") != self.claimed_key:
+            return False, f"imageKey is {body.get('imageKey')}, expected the claimed/ copy"
+        pending = self.aws("s3api", "head-object", "--bucket", self.bucket, "--key", self.photo_key, check=False)
+        if pending:
+            return False, "pending/ object was not removed after the claim"
         status, body = self.api("api", "GET", "/assets/{assetId}/photo", self.claims("Administrator"),
                                 path={"assetId": self.asset_id})
         if status != 200:
             return False, f"HTTP {status} {body}"
         self.photo_url = body["photoUrl"]
         fetched = http_status(urllib.request.Request(self.photo_url))
-        return fetched == 200, f"photo endpoint HTTP 200, download HTTP {fetched}, analysis {body.get('analysisStatus')}"
+        return fetched == 200, (f"claimed to claimed/, pending removed, download HTTP {fetched}, "
+                                f"analysis {body.get('analysisStatus')}")
 
     def check_photo_http_denied(self):
         status = http_status(urllib.request.Request(self.photo_url.replace("https://", "http://", 1)))
@@ -358,7 +369,9 @@ class SmokeTest:
             keys += [json.dumps({"PK": item["PK"], "SK": item["SK"]}) for item in history.get("Items", [])]
         if self.photo_key:
             keys.append(self.ddb_key(f"PHOTO#{self.photo_key}", "ANALYSIS"))
-            self.aws("s3", "rm", f"s3://{self.bucket}/{self.photo_key}", check=False)
+            for key in (self.photo_key, self.claimed_key):
+                if key:
+                    self.aws("s3", "rm", f"s3://{self.bucket}/{key}", check=False)
         for key in keys:
             self.aws("dynamodb", "delete-item", "--table-name", table, "--key", key, check=False)
         print(f"Removed smoke test data for run {self.run_id}.")

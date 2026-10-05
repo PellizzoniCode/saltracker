@@ -48,7 +48,7 @@ RECORD = {
 
 class MaintenanceApiTests(unittest.TestCase):
     def setUp(self):
-        self.api, self.table, _ = _load_api()
+        self.api, self.table, _, _ = _load_api()
         self.table.get_item.return_value = {"Item": ASSET}
 
     def event(self, payload=None, group="Administrator", sub="user-1"):
@@ -437,7 +437,7 @@ class MaintenanceApiTests(unittest.TestCase):
 
 class MaintenanceRecordChangeTests(unittest.TestCase):
     def setUp(self):
-        self.api, self.table, self.transactions = _load_api()
+        self.api, self.table, self.transactions, _ = _load_api()
         self.table.get_item.return_value = {"Item": ASSET}
         self.table.query.return_value = {"Items": [dict(RECORD)]}
 
