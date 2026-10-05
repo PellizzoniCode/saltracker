@@ -513,7 +513,9 @@ Resources:
   # us set retention and alarms as part of the stack instead of a manual
   # post-deploy script. If a log group with the same name already exists
   # outside this stack (e.g. from an earlier deploy before this template
-  # change), delete it first: aws logs delete-log-group --log-group-name ...
+  # change), import it into the stack rather than deleting it, so its logs
+  # are kept: see "Migrating an existing deployment" in
+  # docs/cloudwatch-monitoring.md.
 
   AlertsTopic:
     Type: AWS::SNS::Topic
