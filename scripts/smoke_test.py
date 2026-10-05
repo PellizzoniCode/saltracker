@@ -43,6 +43,7 @@ class SmokeTest:
         self.tags = []
         self.photo_key = None
         self.claimed_key = None
+        self.photo_url = None
         self.functions = {
             "api": f"smart-asset-api-{env}",
             "upload": f"smart-asset-photo-upload-{env}",
@@ -63,7 +64,11 @@ class SmokeTest:
         )
         if check and result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or f"aws {args[0]} failed")
-        return json.loads(result.stdout) if result.stdout.strip() else {}
+        try:
+            return json.loads(result.stdout) if result.stdout.strip() else {}
+        except json.JSONDecodeError:
+            # Some commands (aws s3 rm) print plain text, not JSON.
+            return {}
 
     def record(self, area, check, passed, detail=""):
         self.results.append((area, check, "PASS" if passed else "FAIL", detail))
@@ -242,7 +247,12 @@ class SmokeTest:
             if status in {"Ready", "Failed"}:
                 break
             time.sleep(5)
-        return status == "Ready", f"status {status}"
+        detail = f"status {status}"
+        if status == "Failed" and not self.image:
+            # The generated PNG is a plain square, so the model may not be able
+            # to classify it. A real asset photo gives a meaningful result.
+            detail += "; rerun with --image <asset photo>"
+        return status == "Ready", detail
 
     def check_photo_view(self):
         status, body = self.api("api", "PUT", "/assets/{assetId}", self.claims("Administrator"),
@@ -267,6 +277,8 @@ class SmokeTest:
                                 f"analysis {body.get('analysisStatus')}")
 
     def check_photo_http_denied(self):
+        if not self.photo_url:
+            return False, "skipped: no presigned URL from the previous check"
         status = http_status(urllib.request.Request(self.photo_url.replace("https://", "http://", 1)))
         return status == 403, f"HTTP {status}"
 
