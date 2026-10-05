@@ -48,7 +48,7 @@ scripts/dev.sh web                                                              
 | `sync`                                               | Watches backend code and hot-syncs Lambda changes with `sam sync --watch` (dev stacks only)                                                                                                                                                                                        |
 | `env`                                                | Writes `frontend/.env` from the stack outputs                                                                                                                                                                                                                                      |
 | `seed`                                               | Loads the sample assets through the deployed Lambda, so validation and tag uniqueness still apply. Safe to re-run; existing tags are skipped                                                                                                                                       |
-| `user -e EMAIL -p PASSWORD -g GROUP [-d DEPARTMENT]` | Creates a confirmed Cognito user in `GROUP`, optionally setting `custom:department`. The password must meet the pool policy (12+ characters with upper, lower, number, and symbol); omit `-p` to be prompted for it. Long forms: `--email`, `--password`, `--group`, `--department` |
+| `user -e EMAIL -g GROUP [-d DEPARTMENT] [-p PASSWORD]` | Creates a confirmed Cognito user in `GROUP`, optionally setting `custom:department`. The password must meet the pool policy (12+ characters with upper, lower, number, and symbol); you're prompted for it at a hidden prompt unless `-p` is given. Long forms: `--email`, `--password`, `--group`, `--department` |
 | `web`                                                | Installs frontend dependencies if needed and runs the Vite dev server                                                                                                                                                                                                              |
 | `down [--purge]`                                     | Deletes the stack; `--purge` also deletes the retained DynamoDB table                                                                                                                                                                                                              |
 | `test` / `build`                                     | Runs only the unit tests / only validate and build                                                                                                                                                                                                                                 |
@@ -106,7 +106,7 @@ Create users in Cognito, confirm them, and assign them to one of these groups:
 - `Administrator`
 - `Auditor`
 
-`scripts/dev.sh user -e EMAIL -p PASSWORD -g GROUP [-d DEPARTMENT]` does this in one step.
+`scripts/dev.sh user -e EMAIL -g GROUP [-d DEPARTMENT]` does this in one step and prompts for the password.
 
 For employee record scoping, set each asset's `assignedUserId` to the user's Cognito `sub`. For manager scoping, add a mutable Cognito custom attribute named `custom:department` and populate it before the user signs in.
 

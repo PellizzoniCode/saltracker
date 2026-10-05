@@ -6,9 +6,9 @@
 #   scripts/dev.sh sync               watch backend code and hot-sync Lambda changes (sam sync)
 #   scripts/dev.sh env                write frontend/.env from the stack outputs
 #   scripts/dev.sh seed               load sample-data/assets.json through the deployed Lambda
-#   scripts/dev.sh user -e EMAIL -p PASSWORD -g GROUP [-d DEPARTMENT]
+#   scripts/dev.sh user -e EMAIL -g GROUP [-d DEPARTMENT] [-p PASSWORD]
 #                                     create a confirmed Cognito user in GROUP
-#                                     (omit -p to be prompted for the password)
+#                                     (prompts for the password unless -p is given)
 #   scripts/dev.sh web                start the Vite dev server
 #   scripts/dev.sh down [--purge]     delete the stack (--purge also deletes the retained table)
 #
@@ -68,6 +68,14 @@ output() {
     --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text
 }
 
+# Like output, but fails when the stack or the output is missing.
+stack_output() {
+  local value
+  value="$(output "$1")" || die "Could not read stack $STACK_NAME in $AWS_REGION."
+  [[ -n "$value" && "$value" != "None" ]] || die "Stack $STACK_NAME has no output $1."
+  printf '%s' "$value"
+}
+
 reject_production_target
 
 cmd_test() {
@@ -118,11 +126,16 @@ cmd_sync() {
 cmd_env() {
   check_aws
   log "Writing frontend/.env from stack outputs"
+  # Read every output first so a missing one never leaves a half-written file.
+  local pool client api
+  pool="$(stack_output UserPoolId)"
+  client="$(stack_output UserPoolClientId)"
+  api="$(stack_output ApiUrl)"
   cat > frontend/.env <<EOF
 VITE_AWS_REGION=$AWS_REGION
-VITE_USER_POOL_ID=$(output UserPoolId)
-VITE_USER_POOL_CLIENT_ID=$(output UserPoolClientId)
-VITE_API_URL=$(output ApiUrl)
+VITE_USER_POOL_ID=$pool
+VITE_USER_POOL_CLIENT_ID=$client
+VITE_API_URL=$api
 EOF
   cat frontend/.env
 }
@@ -132,13 +145,15 @@ cmd_seed() {
   local fn="smart-asset-api-$ENVIRONMENT"
   log "Seeding sample assets through $fn"
   # Invoking the real handler with synthetic Administrator claims keeps
-  # validation and the atomic tag reservation in play. Duplicates return 409.
+  # validation and the atomic tag reservation in play. Duplicates return 409;
+  # any other response (including an unhandled Lambda error) fails the seed.
   FN="$fn" python3 - <<'PY'
-import json, os, subprocess, tempfile
+import json, os, subprocess, sys, tempfile
 
 with open("sample-data/assets.json") as f:
     assets = json.load(f)
 
+created = existing = 0
 for asset in assets:
     event = {
         "httpMethod": "POST",
@@ -149,23 +164,32 @@ for asset in assets:
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as ev, \
          tempfile.NamedTemporaryFile(suffix=".json", delete=False) as out:
         json.dump(event, ev)
-    subprocess.run(
-        ["aws", "lambda", "invoke", "--function-name", os.environ["FN"],
-         "--cli-binary-format", "raw-in-base64-out",
-         "--payload", f"file://{ev.name}", out.name],
-        check=True, stdout=subprocess.DEVNULL)
-    with open(out.name) as f:
-        result = json.load(f)
-    os.unlink(ev.name); os.unlink(out.name)
-    status = result.get("statusCode")
-    note = {201: "created", 409: "already exists"}.get(status, result.get("body"))
-    print(f"  {asset['assetTag']}: {status} {note}")
+    try:
+        subprocess.run(
+            ["aws", "lambda", "invoke", "--function-name", os.environ["FN"],
+             "--cli-binary-format", "raw-in-base64-out",
+             "--payload", f"file://{ev.name}", out.name],
+            check=True, stdout=subprocess.DEVNULL)
+        with open(out.name) as f:
+            result = json.load(f)
+    finally:
+        os.unlink(ev.name); os.unlink(out.name)
+    status = result.get("statusCode") if isinstance(result, dict) else None
+    if status == 201:
+        created += 1
+        print(f"  {asset['assetTag']}: created")
+    elif status == 409:
+        existing += 1
+        print(f"  {asset['assetTag']}: already exists")
+    else:
+        sys.exit(f"Seed failed for {asset['assetTag']} (status {status}): {json.dumps(result)}")
+print(f"  {len(assets)} assets: {created} created, {existing} already present")
 PY
 }
 
 cmd_user() {
   check_aws
-  local usage="Usage: dev.sh user -e EMAIL -p PASSWORD -g GROUP [-d DEPARTMENT]"
+  local usage="Usage: dev.sh user -e EMAIL -g GROUP [-d DEPARTMENT] [-p PASSWORD]"
   local email="" password="" group="" department=""
   while [[ $# -gt 0 ]]; do
     [[ $# -ge 2 ]] || die "Missing value for $1. $usage"
