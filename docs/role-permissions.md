@@ -13,7 +13,7 @@
 | Update financial/assignment fields | No | No | No | Yes | No |
 | View maintenance history | Yes | Yes | Yes | Yes | Yes |
 | Record maintenance | No | Yes | No | Yes | No |
-| Edit maintenance record | No | Own records | No | Yes | No |
+| Edit maintenance record | No | Own records, own department | No | Yes | No |
 | Delete maintenance record | No | No | No | Yes | No |
 | Manage users and assignments | No | No | No | Planned | No |
 

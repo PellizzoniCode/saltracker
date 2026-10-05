@@ -35,6 +35,38 @@ async function api(path, options = {}) {
   return body;
 }
 
+// Mirrors the backend rules so the UI only offers actions the API will
+// allow. The API remains the authority.
+function useIdentity() {
+  const [identity, setIdentity] = useState(null);
+
+  useEffect(() => {
+    let active = true;
+
+    fetchAuthSession()
+      .then((session) => {
+        const payload = session.tokens?.idToken?.payload || {};
+
+        if (active) {
+          setIdentity({
+            sub: payload.sub,
+            groups: new Set(payload["cognito:groups"] || []),
+            department: payload["custom:department"],
+          });
+        }
+      })
+      .catch(() => {
+        if (active) setIdentity(null);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  return identity;
+}
+
 const emptyMaintenance = {
   maintenanceType: "Preventive",
   description: "",
@@ -63,8 +95,28 @@ function MaintenancePage({
     useState(false);
   const [maintenanceMessage, setMaintenanceMessage] =
     useState("");
-  const [editingMaintenanceId, setEditingMaintenanceId] =
+  const [editingMaintenance, setEditingMaintenance] =
     useState(null);
+  const editingMaintenanceId =
+    editingMaintenance?.maintenanceId ?? null;
+  const identity = useIdentity();
+  const isAdministrator =
+    identity?.groups.has("Administrator") ?? false;
+
+  function canEditMaintenance(item) {
+    if (isAdministrator) return true;
+
+    return Boolean(
+      identity?.groups.has("Technician") &&
+        identity.sub &&
+        item.performedBy === identity.sub &&
+        identity.department &&
+        identity.department === asset.department
+    );
+  }
+
+  const showMaintenanceActions =
+    isAdministrator || history.some(canEditMaintenance);
 
   const loadMaintenance = useCallback(async () => {
     setLoading(true);
@@ -110,7 +162,7 @@ function MaintenancePage({
   }
 
   function editMaintenance(item) {
-    setEditingMaintenanceId(item.maintenanceId);
+    setEditingMaintenance(item);
     setMaintenanceForm(
       Object.fromEntries(
         Object.keys(emptyMaintenance).map((key) => [
@@ -123,7 +175,7 @@ function MaintenancePage({
   }
 
   function cancelEditMaintenance() {
-    setEditingMaintenanceId(null);
+    setEditingMaintenance(null);
     setMaintenanceForm(emptyMaintenance);
   }
 
@@ -173,6 +225,11 @@ function MaintenancePage({
         )
       );
 
+      if (editingMaintenance) {
+        payload.expectedUpdatedAt =
+          editingMaintenance.updatedAt ?? null;
+      }
+
       const result = await api(
         maintenancePath(editingMaintenanceId),
         {
@@ -183,7 +240,7 @@ function MaintenancePage({
 
       setMaintenanceMessage(result.message);
       setMaintenanceForm(emptyMaintenance);
-      setEditingMaintenanceId(null);
+      setEditingMaintenance(null);
       setAiRecommendation(null);
       await loadMaintenance();
     } catch (error) {
@@ -551,7 +608,7 @@ function MaintenancePage({
                 <th>Next maintenance</th>
                 <th>Cost</th>
                 <th>Performed by</th>
-                <th>Actions</th>
+                {showMaintenanceActions && <th>Actions</th>}
               </tr>
             </thead>
 
@@ -580,27 +637,33 @@ function MaintenancePage({
                         item.performedBy ||
                         "—"}
                     </td>
-                    <td>
-                      <button
-                        type="button"
-                        className="secondary table-action"
-                        onClick={() => editMaintenance(item)}
-                      >
-                        Edit
-                      </button>{" "}
-                      <button
-                        type="button"
-                        className="secondary table-action"
-                        onClick={() => deleteMaintenance(item)}
-                      >
-                        Delete
-                      </button>
-                    </td>
+                    {showMaintenanceActions && (
+                      <td>
+                        {canEditMaintenance(item) && (
+                          <button
+                            type="button"
+                            className="secondary table-action"
+                            onClick={() => editMaintenance(item)}
+                          >
+                            Edit
+                          </button>
+                        )}{" "}
+                        {isAdministrator && (
+                          <button
+                            type="button"
+                            className="secondary table-action"
+                            onClick={() => deleteMaintenance(item)}
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan="8">
+                  <td colSpan={showMaintenanceActions ? 8 : 7}>
                     {loading
                       ? "Loading maintenance history..."
                       : "No maintenance history has been recorded."}

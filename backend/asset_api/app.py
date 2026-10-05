@@ -610,6 +610,25 @@ def _authorized_maintenance(asset_id, maintenance_id, claims, groups):
             },
         )
 
+    # can_read lets Auditors see every department, so a Technician who is
+    # also an Auditor would pass it. Changes stay scoped to the caller's
+    # own department unless they are an Administrator.
+    department = claims.get("custom:department")
+
+    if "Administrator" not in groups and (
+        not department or department != asset.get("department")
+    ):
+        return None, response(
+            403,
+            {
+                "error": "Forbidden",
+                "message": (
+                    "You can only change maintenance for assets "
+                    "in your department."
+                ),
+            },
+        )
+
     record = _find_maintenance(asset_id, maintenance_id)
 
     if not record:
@@ -711,6 +730,36 @@ def _create_maintenance(event, asset_id, claims, groups):
         },
     )
 
+def _maintenance_unchanged_condition(existing):
+    """Condition that the stored record is still the version that was read."""
+    values = {":maintenance_id": existing["maintenanceId"]}
+
+    if existing.get("updatedAt"):
+        values[":updated_at"] = existing["updatedAt"]
+        return (
+            "maintenanceId = :maintenance_id AND updatedAt = :updated_at",
+            values,
+        )
+
+    return (
+        "maintenanceId = :maintenance_id AND attribute_not_exists(updatedAt)",
+        values,
+    )
+
+
+def _maintenance_conflict():
+    return response(
+        409,
+        {
+            "error": "Conflict",
+            "message": (
+                "The maintenance record changed during your "
+                "update. Refresh and try again."
+            ),
+        },
+    )
+
+
 def _update_maintenance(
     event,
     asset_id,
@@ -758,7 +807,20 @@ def _update_maintenance(
             },
         )
 
-    maintenance = validate_maintenance(_body(event))
+    body = _body(event)
+    maintenance = validate_maintenance(body)
+
+    # The client sends the updatedAt it last saw so an edit made from a
+    # stale form cannot silently overwrite someone else's change.
+    if (
+        "expectedUpdatedAt" in body
+        and body["expectedUpdatedAt"] != existing.get("updatedAt")
+    ):
+        return _maintenance_conflict()
+
+    unchanged, unchanged_values = _maintenance_unchanged_condition(
+        existing,
+    )
 
     # Identity and audit fields always come from the stored record or the
     # authenticated caller, never from the request body.
@@ -788,22 +850,11 @@ def _update_maintenance(
         try:
             TABLE.put_item(
                 Item=item,
-                ConditionExpression="maintenanceId = :maintenance_id",
-                ExpressionAttributeValues={
-                    ":maintenance_id": maintenance_id,
-                },
+                ConditionExpression=unchanged,
+                ExpressionAttributeValues=unchanged_values,
             )
         except TABLE.meta.client.exceptions.ConditionalCheckFailedException:
-            return response(
-                409,
-                {
-                    "error": "Conflict",
-                    "message": (
-                        "The maintenance record changed during your "
-                        "update. Refresh and try again."
-                    ),
-                },
-            )
+            return _maintenance_conflict()
     else:
         # A new performed date moves the record to a new sort key, so the
         # old item is removed in the same transaction.
@@ -820,28 +871,15 @@ def _update_maintenance(
                         "PK": existing["PK"],
                         "SK": existing["SK"],
                     }),
-                    "ConditionExpression": (
-                        "maintenanceId = :maintenance_id"
+                    "ConditionExpression": unchanged,
+                    "ExpressionAttributeValues": _wire_item(
+                        unchanged_values,
                     ),
-                    "ExpressionAttributeValues": {
-                        ":maintenance_id": SERIALIZER.serialize(
-                            maintenance_id
-                        ),
-                    },
                 }},
             ])
         except ClientError as exc:
             if _condition_failed(exc):
-                return response(
-                    409,
-                    {
-                        "error": "Conflict",
-                        "message": (
-                            "The maintenance record changed during "
-                            "your update. Refresh and try again."
-                        ),
-                    },
-                )
+                return _maintenance_conflict()
             raise
 
     LOGGER.info(
@@ -943,21 +981,31 @@ def _list_maintenance(asset_id, claims, groups):
                 ),
             },
         )
-    result = TABLE.query(
-        KeyConditionExpression=(
+    params = {
+        "KeyConditionExpression": (
             "PK = :pk AND begins_with(SK, :maintenance)"
         ),
-        ExpressionAttributeValues={
+        "ExpressionAttributeValues": {
             ":pk": f"ASSET#{asset_id}",
             ":maintenance": "MAINTENANCE#",
         },
-        ScanIndexForward=False,
-    )
+        "ScanIndexForward": False,
+    }
+    items = []
 
-    items = [
-        _clean_asset(item)
-        for item in result.get("Items", [])
-    ]
+    # A long history can exceed one 1 MB query page; read every page so
+    # older records stay visible and editable.
+    while True:
+        result = TABLE.query(**params)
+        items.extend(
+            _clean_asset(item)
+            for item in result.get("Items", [])
+        )
+
+        if "LastEvaluatedKey" not in result:
+            break
+
+        params["ExclusiveStartKey"] = result["LastEvaluatedKey"]
 
     try:
         recommendation = calculate_maintenance_recommendation(
