@@ -292,7 +292,8 @@ Resources:
               - events:ListTargetsByRule
               - events:TagResource
               - events:UntagResource
-            Resource: !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/smart-asset-tracker-dev-*
+            # The rule has an explicit Name in template.yaml (MaintenanceScheduler Schedule event).
+            Resource: !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/smart-asset-maintenance-daily-dev
 
   DeployResourcesPolicyDev:
     Type: AWS::IAM::ManagedPolicy
@@ -585,7 +586,8 @@ Resources:
               - events:ListTargetsByRule
               - events:TagResource
               - events:UntagResource
-            Resource: !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/smart-asset-tracker-prod-*
+            # The rule has an explicit Name in template.yaml (MaintenanceScheduler Schedule event).
+            Resource: !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/smart-asset-maintenance-daily-prod
 
   DeployResourcesPolicyProd:
     Type: AWS::IAM::ManagedPolicy
