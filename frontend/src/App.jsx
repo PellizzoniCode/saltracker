@@ -17,6 +17,7 @@ const emptyAsset = {
   salvageValue: "0.00",
   usefulLifeMonths: 48,
   department: "",
+  location: "",
   assignedUserId: "",
   condition: "Good",
   status: "Available",
@@ -33,6 +34,42 @@ async function api(path, options = {}) {
   const body = await result.json();
   if (!result.ok) throw new Error(body.message || "Request failed");
   return body;
+}
+
+// Mirrors the backend rules so the UI only offers actions the API will
+// allow. The API remains the authority.
+function useIdentity() {
+  const [identity, setIdentity] = useState(null);
+
+  useEffect(() => {
+    let active = true;
+
+    fetchAuthSession()
+      .then((session) => {
+        const payload = session.tokens?.idToken?.payload || {};
+
+        if (active) {
+          setIdentity({
+            sub: payload.sub,
+            groups: new Set(payload["cognito:groups"] || []),
+            department: payload["custom:department"],
+          });
+        }
+      })
+      .catch(() => {
+        if (active) setIdentity(null);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  return identity;
+}
+
+function formatMoney(value) {
+  return value === undefined || value === null ? "—" : `$${value}`;
 }
 
 const emptyMaintenance = {
@@ -63,6 +100,28 @@ function MaintenancePage({
     useState(false);
   const [maintenanceMessage, setMaintenanceMessage] =
     useState("");
+  const [editingMaintenance, setEditingMaintenance] =
+    useState(null);
+  const editingMaintenanceId =
+    editingMaintenance?.maintenanceId ?? null;
+  const identity = useIdentity();
+  const isAdministrator =
+    identity?.groups.has("Administrator") ?? false;
+
+  function canEditMaintenance(item) {
+    if (isAdministrator) return true;
+
+    return Boolean(
+      identity?.groups.has("Technician") &&
+        identity.sub &&
+        item.performedBy === identity.sub &&
+        identity.department &&
+        identity.department === asset.department
+    );
+  }
+
+  const showMaintenanceActions =
+    isAdministrator || history.some(canEditMaintenance);
 
   const loadMaintenance = useCallback(async () => {
     setLoading(true);
@@ -97,6 +156,62 @@ function MaintenancePage({
     }));
   }
 
+  function maintenancePath(maintenanceId) {
+    const base = `/assets/${encodeURIComponent(
+      asset.assetId
+    )}/maintenance`;
+
+    return maintenanceId
+      ? `${base}/${encodeURIComponent(maintenanceId)}`
+      : base;
+  }
+
+  function editMaintenance(item) {
+    setEditingMaintenance(item);
+    setMaintenanceForm(
+      Object.fromEntries(
+        Object.keys(emptyMaintenance).map((key) => [
+          key,
+          item[key] ?? "",
+        ])
+      )
+    );
+    setMaintenanceMessage("");
+  }
+
+  function cancelEditMaintenance() {
+    setEditingMaintenance(null);
+    setMaintenanceForm(emptyMaintenance);
+  }
+
+  async function deleteMaintenance(item) {
+    if (
+      !window.confirm(
+        `Delete the ${item.maintenanceType} record from ${item.performedDate}?`
+      )
+    ) {
+      return;
+    }
+
+    setMaintenanceMessage("");
+
+    try {
+      const result = await api(
+        maintenancePath(item.maintenanceId),
+        { method: "DELETE" }
+      );
+
+      if (editingMaintenanceId === item.maintenanceId) {
+        cancelEditMaintenance();
+      }
+
+      setMaintenanceMessage(result.message);
+      await loadMaintenance();
+    } catch (error) {
+      setMaintenanceMessage(error.message);
+    }
+  }
+
   async function recordMaintenance(event) {
     event.preventDefault();
 
@@ -115,18 +230,22 @@ function MaintenancePage({
         )
       );
 
+      if (editingMaintenance) {
+        payload.expectedUpdatedAt =
+          editingMaintenance.updatedAt ?? null;
+      }
+
       const result = await api(
-        `/assets/${encodeURIComponent(
-          asset.assetId
-        )}/maintenance`,
+        maintenancePath(editingMaintenanceId),
         {
-          method: "POST",
+          method: editingMaintenanceId ? "PUT" : "POST",
           body: JSON.stringify(payload),
         }
       );
 
       setMaintenanceMessage(result.message);
       setMaintenanceForm(emptyMaintenance);
+      setEditingMaintenance(null);
       setAiRecommendation(null);
       await loadMaintenance();
     } catch (error) {
@@ -232,27 +351,78 @@ function MaintenancePage({
           </div>
 
           <div>
+            <dt>Location</dt>
+            <dd>{asset.location || "—"}</dd>
+          </div>
+
+          <div>
             <dt>In-service date</dt>
             <dd>{asset.inServiceDate || "—"}</dd>
           </div>
-
-          <div>
-            <dt>Current book value</dt>
-            <dd>
-              {asset.depreciation?.currentBookValue
-                ? `$${asset.depreciation.currentBookValue}`
-                : "—"}
-            </dd>
-          </div>
-
-          <div>
-            <dt>Replacement date</dt>
-            <dd>
-              {asset.depreciation
-                ?.estimatedReplacementDate || "—"}
-            </dd>
-          </div>
         </dl>
+      </section>
+
+      <section className="panel">
+        <h2>Depreciation</h2>
+
+        {asset.depreciation ? (
+          <dl className="asset-summary">
+            <div>
+              <dt>Original purchase value</dt>
+              <dd>
+                {formatMoney(
+                  asset.depreciation.originalPurchaseValue
+                )}
+              </dd>
+            </div>
+
+            <div>
+              <dt>Annual depreciation</dt>
+              <dd>
+                {formatMoney(
+                  asset.depreciation.annualDepreciation
+                )}
+              </dd>
+            </div>
+
+            <div>
+              <dt>Accumulated depreciation</dt>
+              <dd>
+                {formatMoney(
+                  asset.depreciation.accumulatedDepreciation
+                )}
+              </dd>
+            </div>
+
+            <div>
+              <dt>Current book value</dt>
+              <dd>
+                {formatMoney(
+                  asset.depreciation.currentBookValue
+                )}
+              </dd>
+            </div>
+
+            <div>
+              <dt>Useful life consumed</dt>
+              <dd>
+                {`${asset.depreciation.usefulLifeConsumedPercent}%`}
+              </dd>
+            </div>
+
+            <div>
+              <dt>Estimated replacement date</dt>
+              <dd>
+                {asset.depreciation.estimatedReplacementDate}
+              </dd>
+            </div>
+          </dl>
+        ) : (
+          <p>
+            Depreciation is unavailable because the asset is
+            missing financial or in-service information.
+          </p>
+        )}
       </section>
 
       <section className="maintenance-grid">
@@ -358,7 +528,11 @@ function MaintenancePage({
       </section>
 
       <section className="panel">
-        <h2>Record maintenance</h2>
+        <h2>
+          {editingMaintenanceId
+            ? `Edit maintenance ${editingMaintenanceId}`
+            : "Record maintenance"}
+        </h2>
 
         <form
           className="maintenance-form"
@@ -447,8 +621,21 @@ function MaintenancePage({
           >
             {savingMaintenance
               ? "Saving..."
-              : "Record maintenance"}
+              : editingMaintenanceId
+                ? "Save changes"
+                : "Record maintenance"}
           </button>
+
+          {editingMaintenanceId && (
+            <button
+              type="button"
+              className="secondary"
+              onClick={cancelEditMaintenance}
+              disabled={savingMaintenance}
+            >
+              Cancel
+            </button>
+          )}
         </form>
       </section>
 
@@ -477,6 +664,7 @@ function MaintenancePage({
                 <th>Next maintenance</th>
                 <th>Cost</th>
                 <th>Performed by</th>
+                {showMaintenanceActions && <th>Actions</th>}
               </tr>
             </thead>
 
@@ -505,11 +693,33 @@ function MaintenancePage({
                         item.performedBy ||
                         "—"}
                     </td>
+                    {showMaintenanceActions && (
+                      <td>
+                        {canEditMaintenance(item) && (
+                          <button
+                            type="button"
+                            className="secondary table-action"
+                            onClick={() => editMaintenance(item)}
+                          >
+                            Edit
+                          </button>
+                        )}{" "}
+                        {isAdministrator && (
+                          <button
+                            type="button"
+                            className="secondary table-action"
+                            onClick={() => deleteMaintenance(item)}
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan="7">
+                  <td colSpan={showMaintenanceActions ? 8 : 7}>
                     {loading
                       ? "Loading maintenance history..."
                       : "No maintenance history has been recorded."}
@@ -1081,6 +1291,7 @@ if (maintenanceAsset) {
       <th>Category</th>
       <th>Description</th>
       <th>Department</th>
+      <th>Location</th>
       <th>Status</th>
       <th>Maintenance</th>
     </tr>
@@ -1093,6 +1304,7 @@ if (maintenanceAsset) {
         <td>{asset.category}</td>
         <td>{asset.description}</td>
         <td>{asset.department || "—"}</td>
+        <td>{asset.location || "—"}</td>
         <td>
           <span className="status">
             {asset.status}

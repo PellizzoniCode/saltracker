@@ -7,7 +7,7 @@ against real AWS resources without needing Cognito users or passwords. It then
 scans the functions' logs for authorization failures.
 
 Usage:
-  python3 scripts/smoke_test.py [--env dev|test] [--image PHOTO] [--output FILE] [--keep]
+  python3 scripts/smoke_test.py [--env dev|test] [--stack NAME] [--image PHOTO] [--output FILE] [--keep]
 
 It needs only the Python standard library and a configured AWS CLI. Data it
 creates is tagged SMOKE-<timestamp> and removed at the end unless --keep is set.
@@ -31,11 +31,11 @@ LOG_PATTERN = '?AccessDenied ?AccessDeniedException ?AuthorizationError ?"is not
 
 
 class SmokeTest:
-    def __init__(self, env, region, image=None):
+    def __init__(self, env, region, image=None, stack=None):
         self.env = env
         self.image = image
         self.region = region
-        self.stack = f"smart-asset-tracker-{env}"
+        self.stack = stack or f"smart-asset-tracker-{env}"
         self.run_id = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
         self.started_ms = int(time.time() * 1000)
         self.results = []
@@ -143,6 +143,10 @@ class SmokeTest:
             self.step("Photo", "Analysis completes (S3 read, Bedrock, DynamoDB)", self.check_analysis)
             self.step("Photo", "Asset photo view (presigned GET over HTTPS)", self.check_photo_view)
             self.step("Photo", "Presigned GET over HTTP denied by bucket policy", self.check_photo_http_denied)
+        self.step("Maintenance", "Record created (PutItem)", self.check_maintenance_create)
+        self.step("Maintenance", "Record moved to a new date (TransactWriteItems with Delete)",
+                  self.check_maintenance_move)
+        self.step("Maintenance", "Record deleted by Administrator (DeleteItem)", self.check_maintenance_delete)
         self.step("Maintenance", "AI recommendation (Bedrock via inference profile)", self.check_recommendation)
         self.step("Maintenance", "Topic encrypted with alias/aws/sns", self.check_topic_encryption)
         self.step("Maintenance", "Scheduler publishes to the encrypted topic", self.check_scheduler)
@@ -255,6 +259,40 @@ class SmokeTest:
         status = http_status(urllib.request.Request(self.photo_url.replace("https://", "http://", 1)))
         return status == 403, f"HTTP {status}"
 
+    def maintenance_records(self):
+        status, body = self.api("api", "GET", "/assets/{assetId}/maintenance", self.claims("Administrator"),
+                                path={"assetId": self.asset_id})
+        if status != 200:
+            raise RuntimeError(f"list maintenance HTTP {status} {body}")
+        return body["items"]
+
+    def check_maintenance_create(self):
+        status, body = self.api("api", "POST", "/assets/{assetId}/maintenance", self.claims("Administrator"),
+                                {"maintenanceType": "Inspection", "description": "Smoke test inspection",
+                                 "performedDate": "2024-06-01"}, path={"assetId": self.asset_id})
+        self.maintenance_id = body.get("maintenanceId")
+        return status == 201 and bool(self.maintenance_id), f"HTTP {status}"
+
+    def check_maintenance_move(self):
+        status, body = self.api("api", "PUT", "/assets/{assetId}/maintenance/{maintenanceId}",
+                                self.claims("Administrator"),
+                                {"maintenanceType": "Inspection", "description": "Smoke test inspection",
+                                 "performedDate": "2024-07-01"},
+                                path={"assetId": self.asset_id, "maintenanceId": self.maintenance_id})
+        if status != 200:
+            return False, f"HTTP {status} {body}"
+        dates = [item.get("performedDate") for item in self.maintenance_records()]
+        return dates == ["2024-07-01"], f"records after move: {dates}"
+
+    def check_maintenance_delete(self):
+        status, body = self.api("api", "DELETE", "/assets/{assetId}/maintenance/{maintenanceId}",
+                                self.claims("Administrator"),
+                                path={"assetId": self.asset_id, "maintenanceId": self.maintenance_id})
+        if status != 200:
+            return False, f"HTTP {status} {body}"
+        remaining = len(self.maintenance_records())
+        return remaining == 0, f"{remaining} records left"
+
     def check_recommendation(self):
         status, body = self.api("api", "POST", "/assets/{assetId}/maintenance-recommendation",
                                 self.claims("Administrator"), path={"assetId": self.asset_id})
@@ -310,6 +348,14 @@ class SmokeTest:
         keys = [self.ddb_key(f"ASSET_TAG#{tag}", "UNIQUE") for tag in self.tags]
         if self.asset_id:
             keys.append(self.ddb_key(f"ASSET#{self.asset_id}", "METADATA"))
+            history = self.aws(
+                "dynamodb", "query", "--table-name", table, "--projection-expression", "PK, SK",
+                "--key-condition-expression", "PK = :pk AND begins_with(SK, :maintenance)",
+                "--expression-attribute-values",
+                json.dumps({":pk": {"S": f"ASSET#{self.asset_id}"}, ":maintenance": {"S": "MAINTENANCE#"}}),
+                check=False,
+            )
+            keys += [json.dumps({"PK": item["PK"], "SK": item["SK"]}) for item in history.get("Items", [])]
         if self.photo_key:
             keys.append(self.ddb_key(f"PHOTO#{self.photo_key}", "ANALYSIS"))
             self.aws("s3", "rm", f"s3://{self.bucket}/{self.photo_key}", check=False)
@@ -365,13 +411,15 @@ def git_commit():
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--env", default=os.environ.get("ENVIRONMENT", "dev"), choices=["dev", "test"])
+    parser.add_argument("--stack", default=os.environ.get("STACK_NAME"),
+                        help="Stack name (default: smart-asset-tracker-<env>)")
     parser.add_argument("--region", default=os.environ.get("AWS_REGION", "us-east-1"))
     parser.add_argument("--image", help="JPEG or PNG asset photo to upload (default: a generated PNG)")
     parser.add_argument("--output", default="smoke-test-results.md", help="Markdown report path")
     parser.add_argument("--keep", action="store_true", help="Keep the smoke asset, photo and analysis")
     args = parser.parse_args()
 
-    test = SmokeTest(args.env, args.region, args.image)
+    test = SmokeTest(args.env, args.region, args.image, args.stack)
     try:
         test.run()
         test.scan_logs()

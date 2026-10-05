@@ -53,7 +53,7 @@ Every Lambda has its own execution role defined inline in `infrastructure/templa
 
 `PhotoAnalysisFunction` builds the bucket ARN from the bucket name instead of using `!GetAtt`. The bucket's S3 event notification already depends on the function, so `!GetAtt` would create a circular dependency.
 
-`AssetApiFunction` needs `DeleteItem` because changing an asset tag removes the old tag reservation in the same transaction.
+`AssetApiFunction` needs `DeleteItem` for three paths: changing an asset tag removes the old tag reservation in the same transaction, changing a maintenance record's performed date moves it to a new sort key and deletes the old item, and an Administrator can delete a maintenance record.
 
 The photo bucket and the maintenance topic both deny requests that are not made over TLS. The maintenance topic is also encrypted with the AWS-managed SNS key.
 

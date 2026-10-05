@@ -548,6 +548,101 @@ def _update(event, asset_id, claims, groups):
     LOGGER.info("Asset updated assetId=%s actorSub=%s fields=%s", asset_id, claims.get("sub"), sorted(changed_fields))
     return response(200, {"assetId": asset_id, "message": "Asset updated successfully."})
 
+def _maintenance_key(asset_id, performed_date, maintenance_id):
+    return {
+        "PK": f"ASSET#{asset_id}",
+        "SK": f"MAINTENANCE#{performed_date}#{maintenance_id}",
+    }
+
+
+def _find_maintenance(asset_id, maintenance_id):
+    """The sort key embeds the date, so the record is located by its ID."""
+    params = {
+        "KeyConditionExpression": (
+            "PK = :pk AND begins_with(SK, :maintenance)"
+        ),
+        "FilterExpression": "maintenanceId = :maintenance_id",
+        "ExpressionAttributeValues": {
+            ":pk": f"ASSET#{asset_id}",
+            ":maintenance": "MAINTENANCE#",
+            ":maintenance_id": maintenance_id,
+        },
+        "ConsistentRead": True,
+    }
+
+    while True:
+        page = TABLE.query(**params)
+
+        for item in page.get("Items", []):
+            if item.get("maintenanceId") == maintenance_id:
+                return item
+
+        if "LastEvaluatedKey" not in page:
+            return None
+
+        params["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+
+
+def _authorized_maintenance(asset_id, maintenance_id, claims, groups):
+    """Return (record, None) or (None, error response)."""
+    asset = TABLE.get_item(
+        Key=_asset_key(asset_id),
+        ConsistentRead=True,
+    ).get("Item")
+
+    if not asset:
+        return None, response(
+            404,
+            {
+                "error": "NotFound",
+                "message": "Asset was not found.",
+            },
+        )
+
+    if not can_read(groups, claims, asset):
+        return None, response(
+            403,
+            {
+                "error": "Forbidden",
+                "message": (
+                    "You cannot change maintenance for this asset."
+                ),
+            },
+        )
+
+    # can_read lets Auditors see every department, so a Technician who is
+    # also an Auditor would pass it. Changes stay scoped to the caller's
+    # own department unless they are an Administrator.
+    department = claims.get("custom:department")
+
+    if "Administrator" not in groups and (
+        not department or department != asset.get("department")
+    ):
+        return None, response(
+            403,
+            {
+                "error": "Forbidden",
+                "message": (
+                    "You can only change maintenance for assets "
+                    "in your department."
+                ),
+            },
+        )
+
+    record = _find_maintenance(asset_id, maintenance_id)
+
+    if not record:
+        return None, response(
+            404,
+            {
+                "error": "NotFound",
+                "message": "Maintenance record was not found.",
+            },
+        )
+
+    return record, None
+
+
 def _create_maintenance(event, asset_id, claims, groups):
     asset = TABLE.get_item(
         Key=_asset_key(asset_id),
@@ -593,8 +688,11 @@ def _create_maintenance(event, asset_id, claims, groups):
 
     item = {
         **maintenance,
-        "PK": f"ASSET#{asset_id}",
-        "SK": f"MAINTENANCE#{now}#{maintenance_id}",
+        **_maintenance_key(
+            asset_id,
+            maintenance["performedDate"],
+            maintenance_id,
+        ),
         "maintenanceId": maintenance_id,
         "assetId": asset_id,
         "performedBy": claims.get("sub"),
@@ -632,6 +730,231 @@ def _create_maintenance(event, asset_id, claims, groups):
         },
     )
 
+def _maintenance_unchanged_condition(existing):
+    """Condition that the stored record is still the version that was read."""
+    values = {":maintenance_id": existing["maintenanceId"]}
+
+    if existing.get("updatedAt"):
+        values[":updated_at"] = existing["updatedAt"]
+        return (
+            "maintenanceId = :maintenance_id AND updatedAt = :updated_at",
+            values,
+        )
+
+    return (
+        "maintenanceId = :maintenance_id AND attribute_not_exists(updatedAt)",
+        values,
+    )
+
+
+def _maintenance_conflict():
+    return response(
+        409,
+        {
+            "error": "Conflict",
+            "message": (
+                "The maintenance record changed during your "
+                "update. Refresh and try again."
+            ),
+        },
+    )
+
+
+def _update_maintenance(
+    event,
+    asset_id,
+    maintenance_id,
+    claims,
+    groups,
+):
+    if (
+        "Administrator" not in groups
+        and "Technician" not in groups
+    ):
+        return response(
+            403,
+            {
+                "error": "Forbidden",
+                "message": (
+                    "Only an Administrator or Technician can "
+                    "edit maintenance."
+                ),
+            },
+        )
+
+    existing, error = _authorized_maintenance(
+        asset_id,
+        maintenance_id,
+        claims,
+        groups,
+    )
+
+    if error:
+        return error
+
+    if (
+        "Administrator" not in groups
+        and existing.get("performedBy") != claims.get("sub")
+    ):
+        return response(
+            403,
+            {
+                "error": "Forbidden",
+                "message": (
+                    "A Technician can only edit maintenance "
+                    "they recorded."
+                ),
+            },
+        )
+
+    body = _body(event)
+    maintenance = validate_maintenance(body)
+
+    # The client sends the updatedAt it last saw so an edit made from a
+    # stale form cannot silently overwrite someone else's change.
+    if (
+        "expectedUpdatedAt" in body
+        and body["expectedUpdatedAt"] != existing.get("updatedAt")
+    ):
+        return _maintenance_conflict()
+
+    unchanged, unchanged_values = _maintenance_unchanged_condition(
+        existing,
+    )
+
+    # Identity and audit fields always come from the stored record or the
+    # authenticated caller, never from the request body.
+    item = {
+        **maintenance,
+        **_maintenance_key(
+            asset_id,
+            maintenance["performedDate"],
+            maintenance_id,
+        ),
+        "maintenanceId": maintenance_id,
+        "assetId": asset_id,
+        "performedBy": existing.get("performedBy"),
+        "performedByEmail": existing.get("performedByEmail"),
+        "createdAt": existing.get("createdAt"),
+        "updatedBy": claims.get("sub"),
+        "updatedAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+    item = {
+        key: value
+        for key, value in item.items()
+        if value is not None
+    }
+
+    if item["SK"] == existing["SK"]:
+        try:
+            TABLE.put_item(
+                Item=item,
+                ConditionExpression=unchanged,
+                ExpressionAttributeValues=unchanged_values,
+            )
+        except TABLE.meta.client.exceptions.ConditionalCheckFailedException:
+            return _maintenance_conflict()
+    else:
+        # A new performed date moves the record to a new sort key, so the
+        # old item is removed in the same transaction.
+        try:
+            TRANSACTIONS.transact_write_items(TransactItems=[
+                {"Put": {
+                    "TableName": TABLE.name,
+                    "Item": _wire_item(item),
+                    "ConditionExpression": "attribute_not_exists(SK)",
+                }},
+                {"Delete": {
+                    "TableName": TABLE.name,
+                    "Key": _wire_item({
+                        "PK": existing["PK"],
+                        "SK": existing["SK"],
+                    }),
+                    "ConditionExpression": unchanged,
+                    "ExpressionAttributeValues": _wire_item(
+                        unchanged_values,
+                    ),
+                }},
+            ])
+        except ClientError as exc:
+            if _condition_failed(exc):
+                return _maintenance_conflict()
+            raise
+
+    LOGGER.info(
+        "Maintenance updated assetId=%s maintenanceId=%s actorSub=%s",
+        asset_id,
+        maintenance_id,
+        claims.get("sub"),
+    )
+
+    return response(
+        200,
+        {
+            "assetId": asset_id,
+            "maintenanceId": maintenance_id,
+            "message": "Maintenance record updated successfully.",
+        },
+    )
+
+
+def _delete_maintenance(asset_id, maintenance_id, claims, groups):
+    if "Administrator" not in groups:
+        return response(
+            403,
+            {
+                "error": "Forbidden",
+                "message": (
+                    "Only an Administrator can delete maintenance."
+                ),
+            },
+        )
+
+    existing, error = _authorized_maintenance(
+        asset_id,
+        maintenance_id,
+        claims,
+        groups,
+    )
+
+    if error:
+        return error
+
+    try:
+        TABLE.delete_item(
+            Key={"PK": existing["PK"], "SK": existing["SK"]},
+            ConditionExpression="maintenanceId = :maintenance_id",
+            ExpressionAttributeValues={
+                ":maintenance_id": maintenance_id,
+            },
+        )
+    except TABLE.meta.client.exceptions.ConditionalCheckFailedException:
+        return response(
+            404,
+            {
+                "error": "NotFound",
+                "message": "Maintenance record was not found.",
+            },
+        )
+
+    LOGGER.info(
+        "Maintenance deleted assetId=%s maintenanceId=%s actorSub=%s",
+        asset_id,
+        maintenance_id,
+        claims.get("sub"),
+    )
+
+    return response(
+        200,
+        {
+            "assetId": asset_id,
+            "maintenanceId": maintenance_id,
+            "message": "Maintenance record deleted successfully.",
+        },
+    )
+
+
 def _list_maintenance(asset_id, claims, groups):
     asset = TABLE.get_item(
         Key=_asset_key(asset_id),
@@ -658,21 +981,31 @@ def _list_maintenance(asset_id, claims, groups):
                 ),
             },
         )
-    result = TABLE.query(
-        KeyConditionExpression=(
+    params = {
+        "KeyConditionExpression": (
             "PK = :pk AND begins_with(SK, :maintenance)"
         ),
-        ExpressionAttributeValues={
+        "ExpressionAttributeValues": {
             ":pk": f"ASSET#{asset_id}",
             ":maintenance": "MAINTENANCE#",
         },
-        ScanIndexForward=False,
-    )
+        "ScanIndexForward": False,
+    }
+    items = []
 
-    items = [
-        _clean_asset(item)
-        for item in result.get("Items", [])
-    ]
+    # A long history can exceed one 1 MB query page; read every page so
+    # older records stay visible and editable.
+    while True:
+        result = TABLE.query(**params)
+        items.extend(
+            _clean_asset(item)
+            for item in result.get("Items", [])
+        )
+
+        if "LastEvaluatedKey" not in result:
+            break
+
+        params["ExclusiveStartKey"] = result["LastEvaluatedKey"]
 
     try:
         recommendation = calculate_maintenance_recommendation(
@@ -790,7 +1123,9 @@ def _generate_maintenance_recommendation(
 
 def lambda_handler(event, _context):
     method = event.get("httpMethod", "")
-    asset_id = (event.get("pathParameters") or {}).get("assetId")
+    path_parameters = event.get("pathParameters") or {}
+    asset_id = path_parameters.get("assetId")
+    maintenance_id = path_parameters.get("maintenanceId")
     route = event.get("resource") or event.get("path") or ""
     claims, groups = _identity(event)
 
@@ -813,6 +1148,23 @@ def lambda_handler(event, _context):
         ):
             return _generate_maintenance_recommendation(
                 asset_id,
+                claims,
+                groups,
+            )
+
+        if method == "PUT" and asset_id and maintenance_id:
+            return _update_maintenance(
+                event,
+                asset_id,
+                maintenance_id,
+                claims,
+                groups,
+            )
+
+        if method == "DELETE" and asset_id and maintenance_id:
+            return _delete_maintenance(
+                asset_id,
+                maintenance_id,
                 claims,
                 groups,
             )
