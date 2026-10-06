@@ -9,6 +9,9 @@ name: Deploy
 on:
   push:
     branches: [develop]
+  # Manual re-run, e.g. after fixing the Amplify setup. Run it from `develop`: the
+  # dev role only trusts that branch.
+  workflow_dispatch:
 
 permissions:
   contents: read

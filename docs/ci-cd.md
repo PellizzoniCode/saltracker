@@ -148,6 +148,7 @@ Prod would need its own Amplify app and branch; see [Enabling prod](#enabling-pr
 ## Day-to-day
 
 - Merge a PR into `develop`: the dev stack redeploys and the smoke test runs. The report appears on the run summary and as the `smoke-test-results` artifact.
+- Re-run a deploy without a new commit (for example after fixing the Amplify setup): **Actions > Deploy > Run workflow**, with branch `develop` selected, or `gh workflow run deploy.yml --ref develop`. Other branches are refused by the role's trust policy.
 - There is no automated release to prod yet.
 
 ## Rollback

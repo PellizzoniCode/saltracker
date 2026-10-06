@@ -28,10 +28,11 @@ Parameters:
       Enabled (see docs/photo-storage-migration.md).
   PhotoUploadOrigins:
     Type: CommaDelimitedList
-    Default: https://main.dx980x98nt3d5.amplifyapp.com,http://localhost:5173,http://localhost:5180
+    Default: http://localhost:5173,http://localhost:5180
     Description: >-
       Browser origins allowed to POST photos straight to the photo bucket.
-      Override per environment with that environment's Amplify URL.
+      Add that environment's Amplify URL (the CI pipeline passes it from the
+      DEV_PHOTO_UPLOAD_ORIGINS variable).
   PermissionsBoundaryArn:
     Type: String
     Default: ''
