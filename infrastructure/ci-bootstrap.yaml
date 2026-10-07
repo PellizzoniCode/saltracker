@@ -98,21 +98,23 @@ Resources:
               Bool:
                 aws:SecureTransport: 'false'
 
-  # Ceiling for every Lambda execution role created by a deploy role. The deploy
-  # roles may only create roles that carry this boundary, so a compromised
-  # pipeline cannot mint a role more powerful than the app itself.
-  LambdaPermissionBoundary:
+  # Ceiling for every Lambda execution role created by a deploy role. Each deploy
+  # role may only create roles that carry its own environment's boundary, and each
+  # boundary only reaches that environment's table, buckets, log groups and topics.
+  # A compromised dev pipeline therefore cannot grant a dev function access to prod
+  # data, even when both environments share an account.
+  LambdaPermissionBoundaryDev:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      ManagedPolicyName: saltracker-lambda-boundary
-      Description: Maximum permissions for saltracker Lambda execution roles
+      ManagedPolicyName: saltracker-lambda-boundary-dev
+      Description: Maximum permissions for saltracker dev Lambda execution roles
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Sid: Logs
             Effect: Allow
             Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
-            Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/smart-asset-*:*
+            Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/smart-asset-*-dev:*
           - Sid: XRay
             Effect: Allow
             Action:
@@ -135,16 +137,16 @@ Resources:
               - dynamodb:BatchWriteItem
               - dynamodb:ConditionCheckItem
             Resource:
-              - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/smart-asset-tracker-*
-              - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/smart-asset-tracker-*/index/*
+              - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/smart-asset-tracker-dev
+              - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/smart-asset-tracker-dev/index/*
           - Sid: PhotoObjects
             Effect: Allow
             Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
-            Resource: arn:aws:s3:::smart-asset-tracker-*-photos-*/*
+            Resource: arn:aws:s3:::smart-asset-tracker-dev-photos-*/*
           - Sid: PhotoBucketList
             Effect: Allow
             Action: s3:ListBucket
-            Resource: arn:aws:s3:::smart-asset-tracker-*-photos-*
+            Resource: arn:aws:s3:::smart-asset-tracker-dev-photos-*
           - Sid: Bedrock
             Effect: Allow
             Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream]
@@ -154,7 +156,66 @@ Resources:
           - Sid: Notifications
             Effect: Allow
             Action: sns:Publish
-            Resource: !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:smart-asset-*
+            Resource:
+              - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:smart-asset-maintenance-dev
+              - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:smart-asset-tracker-alerts-dev
+
+  LambdaPermissionBoundaryProd:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: saltracker-lambda-boundary-prod
+      Description: Maximum permissions for saltracker prod Lambda execution roles
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: Logs
+            Effect: Allow
+            Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+            Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/smart-asset-*-prod:*
+          - Sid: XRay
+            Effect: Allow
+            Action:
+              - xray:PutTraceSegments
+              - xray:PutTelemetryRecords
+              - xray:GetSamplingRules
+              - xray:GetSamplingTargets
+              - xray:GetSamplingStatisticSummaries
+            Resource: '*'
+          - Sid: AssetTable
+            Effect: Allow
+            Action:
+              - dynamodb:GetItem
+              - dynamodb:PutItem
+              - dynamodb:UpdateItem
+              - dynamodb:DeleteItem
+              - dynamodb:Query
+              - dynamodb:Scan
+              - dynamodb:BatchGetItem
+              - dynamodb:BatchWriteItem
+              - dynamodb:ConditionCheckItem
+            Resource:
+              - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/smart-asset-tracker-prod
+              - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/smart-asset-tracker-prod/index/*
+          - Sid: PhotoObjects
+            Effect: Allow
+            Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+            Resource: arn:aws:s3:::smart-asset-tracker-prod-photos-*/*
+          - Sid: PhotoBucketList
+            Effect: Allow
+            Action: s3:ListBucket
+            Resource: arn:aws:s3:::smart-asset-tracker-prod-photos-*
+          - Sid: Bedrock
+            Effect: Allow
+            Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream]
+            Resource:
+              - arn:aws:bedrock:*::foundation-model/*
+              - !Sub arn:aws:bedrock:*:${AWS::AccountId}:inference-profile/*
+          - Sid: Notifications
+            Effect: Allow
+            Action: sns:Publish
+            Resource:
+              - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:smart-asset-maintenance-prod
+              - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:smart-asset-tracker-alerts-prod
 
   # ---- dev ----------------------------------------------------------------
   DeployPlatformPolicyDev:
@@ -201,7 +262,7 @@ Resources:
             Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/smart-asset-tracker-dev-*
             Condition:
               StringEquals:
-                iam:PermissionsBoundary: !Ref LambdaPermissionBoundary
+                iam:PermissionsBoundary: !Ref LambdaPermissionBoundaryDev
           - Sid: ManageStackRoles
             Effect: Allow
             Action:
@@ -496,7 +557,7 @@ Resources:
             Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/smart-asset-tracker-prod-*
             Condition:
               StringEquals:
-                iam:PermissionsBoundary: !Ref LambdaPermissionBoundary
+                iam:PermissionsBoundary: !Ref LambdaPermissionBoundaryProd
           - Sid: ManageStackRoles
             Effect: Allow
             Action:
@@ -741,6 +802,9 @@ Outputs:
   SamArtifactBucketName:
     Description: Pass to sam deploy --s3-bucket (with --s3-prefix <env>)
     Value: !Ref SamArtifactBucket
-  LambdaPermissionBoundaryArn:
-    Description: Pass as the PermissionsBoundaryArn parameter of infrastructure/template.yaml
-    Value: !Ref LambdaPermissionBoundary
+  LambdaPermissionBoundaryDevArn:
+    Description: Pass as the PermissionsBoundaryArn parameter of infrastructure/template.yaml for the dev stack
+    Value: !Ref LambdaPermissionBoundaryDev
+  LambdaPermissionBoundaryProdArn:
+    Description: Pass as the PermissionsBoundaryArn parameter of infrastructure/template.yaml for the prod stack
+    Value: !Ref LambdaPermissionBoundaryProd

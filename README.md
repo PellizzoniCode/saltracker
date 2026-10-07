@@ -90,7 +90,7 @@ photo bucket and its contents must be removed separately if no longer needed.
 
 ## Set up the CI/CD pipeline
 
-Merging to `develop` deploys the dev stack, runs the smoke test and publishes the frontend to Amplify, using GitHub Actions with OIDC, so no AWS keys are stored. Production is not deployed automatically yet. The pipeline does nothing until you complete this one-time setup (details and troubleshooting: [docs/ci-cd.md](docs/ci-cd.md)).
+Merging to `develop` deploys the dev stack, runs the smoke test and then publishes the frontend to Amplify, using GitHub Actions with OIDC, so no AWS keys are stored. Production is not deployed automatically yet. The pipeline does nothing until you complete this one-time setup (details and troubleshooting: [docs/ci-cd.md](docs/ci-cd.md)).
 
 **You need:** a non-production AWS account, admin credentials for the one-time step, and the [GitHub CLI](https://cli.github.com/) logged in with admin rights on your repository.
 
@@ -106,7 +106,7 @@ Merging to `develop` deploys the dev stack, runs the smoke test and publishes th
    gh secret set AWS_ACCOUNT_ID
    ```
 
-3. **Optionally set variables** (all have defaults; the repository is public, so never put account-specific values in variables, they are not masked in logs):
+3. **Set variables** (`DEV_PHOTO_UPLOAD_ORIGINS` is required, the others have defaults; the repository is public, so never put account-specific values in variables, they are not masked in logs):
 
    ```bash
    gh variable set AWS_REGION --body "us-east-1"

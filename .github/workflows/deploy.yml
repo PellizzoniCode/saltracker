@@ -1,7 +1,8 @@
 name: Deploy
 
-# A merge (push) to develop deploys the dev stack, runs the smoke test and
-# publishes the frontend. Credentials come from GitHub OIDC; see docs/ci-cd.md.
+# A merge (push) to develop runs the tests, deploys the dev stack, runs the smoke
+# test and, only if that passes, publishes the frontend to Amplify. Credentials
+# come from GitHub OIDC; see docs/ci-cd.md.
 #
 # Production is not deployed from here yet. The prod job (GitHub Environment with
 # required reviewers, then a health check) is in git history at 5137944 and is
@@ -41,8 +42,6 @@ jobs:
           account-id: ${{ secrets.AWS_ACCOUNT_ID }}
           region: ${{ vars.AWS_REGION || 'us-east-1' }}
           photo-upload-origins: ${{ vars.DEV_PHOTO_UPLOAD_ORIGINS }}
-          amplify-app-id: ${{ vars.DEV_AMPLIFY_APP_ID }}
-          amplify-branch: ${{ vars.DEV_AMPLIFY_BRANCH }}
 
   smoke-dev:
     needs: deploy-dev
@@ -71,3 +70,22 @@ jobs:
           name: smoke-test-results
           path: smoke-test-results.md
           if-no-files-found: ignore
+
+  # Publishing last means a backend that fails its smoke test never gets a new frontend.
+  # Skipped when no Amplify app is configured. Like deploy-dev, no `environment:`.
+  publish-frontend-dev:
+    needs: smoke-dev
+    if: vars.DEV_AMPLIFY_APP_ID != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/publish-frontend
+        with:
+          environment: dev
+          account-id: ${{ secrets.AWS_ACCOUNT_ID }}
+          region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          amplify-app-id: ${{ vars.DEV_AMPLIFY_APP_ID }}
+          amplify-branch: ${{ vars.DEV_AMPLIFY_BRANCH }}

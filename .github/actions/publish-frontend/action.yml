@@ -1,0 +1,110 @@
+name: Publish frontend
+description: >-
+  Assume the environment's AWS deploy role over OIDC, build the frontend against
+  the outputs of the stack that is already deployed, and publish it to AWS Amplify
+  with a manual deployment. Run it after the backend deploy and smoke test. The
+  caller must check out the repo first and grant the job `id-token: write`.
+
+inputs:
+  environment:
+    description: Stack environment (dev or prod); the stack is smart-asset-tracker-<environment>
+    required: true
+  account-id:
+    description: >-
+      12-digit id of the AWS account that holds the bootstrap stack. Pass it from a
+      repository secret so it is masked in the (public) logs.
+    required: true
+  amplify-app-id:
+    description: >-
+      Amplify app to publish to. It must be a manual-deploy app (created without a Git
+      repository).
+    required: true
+  amplify-branch:
+    description: Amplify branch to publish to
+    required: true
+  region:
+    default: us-east-1
+
+runs:
+  using: composite
+  steps:
+    - name: Check inputs
+      shell: bash
+      env:
+        ACCOUNT_ID: ${{ inputs.account-id }}
+      run: |
+        if ! [[ "$ACCOUNT_ID" =~ ^[0-9]{12}$ ]]; then
+          echo "::error::The AWS_ACCOUNT_ID secret is missing or not a 12-digit account id. Set it with: gh secret set AWS_ACCOUNT_ID (see README, Set up the CI/CD pipeline)."
+          exit 1
+        fi
+
+    - uses: aws-actions/configure-aws-credentials@v6
+      with:
+        role-to-assume: arn:aws:iam::${{ inputs.account-id }}:role/saltracker-deploy-${{ inputs.environment }}
+        aws-region: ${{ inputs.region }}
+        mask-aws-account-id: true
+
+    - name: Set up Node
+      uses: actions/setup-node@v7
+      with:
+        node-version: 20
+        cache: npm
+        cache-dependency-path: frontend/package-lock.json
+
+    - name: Build frontend
+      shell: bash
+      working-directory: frontend
+      env:
+        ENVIRONMENT: ${{ inputs.environment }}
+        REGION: ${{ inputs.region }}
+      run: |
+        stack="smart-asset-tracker-$ENVIRONMENT"
+        output() {
+          aws cloudformation describe-stacks --stack-name "$stack" \
+            --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text
+        }
+        # Vite bakes these into the bundle, so they must come from the stack just deployed.
+        export VITE_AWS_REGION="$REGION"
+        VITE_API_URL="$(output ApiUrl)"
+        VITE_USER_POOL_ID="$(output UserPoolId)"
+        VITE_USER_POOL_CLIENT_ID="$(output UserPoolClientId)"
+        export VITE_API_URL VITE_USER_POOL_ID VITE_USER_POOL_CLIENT_ID
+        for name in VITE_API_URL VITE_USER_POOL_ID VITE_USER_POOL_CLIENT_ID; do
+          if [ -z "${!name}" ] || [ "${!name}" = None ]; then
+            echo "::error::Stack output for $name is missing"; exit 1
+          fi
+        done
+        npm ci
+        npm run build
+
+    - name: Publish frontend to Amplify
+      shell: bash
+      env:
+        APP_ID: ${{ inputs.amplify-app-id }}
+        BRANCH: ${{ inputs.amplify-branch }}
+      run: |
+        if [ -z "$BRANCH" ]; then
+          echo "::error::amplify-branch is required when amplify-app-id is set"; exit 1
+        fi
+        (cd frontend/dist && zip -qr ../site.zip .)
+        read -r job_id upload_url < <(aws amplify create-deployment --app-id "$APP_ID" --branch-name "$BRANCH" \
+          --query '[jobId,zipUploadUrl]' --output text)
+        curl -sS --fail -T frontend/site.zip "$upload_url"
+        aws amplify start-deployment --app-id "$APP_ID" --branch-name "$BRANCH" --job-id "$job_id" > /dev/null
+        echo "Started Amplify deployment $job_id for $APP_ID/$BRANCH"
+
+        # Wait for the result so a broken frontend fails the pipeline (about 10 minutes at most).
+        for _ in $(seq 1 60); do
+          status=$(aws amplify get-job --app-id "$APP_ID" --branch-name "$BRANCH" --job-id "$job_id" \
+            --query 'job.summary.status' --output text)
+          case "$status" in
+            SUCCEED)
+              domain=$(aws amplify get-app --app-id "$APP_ID" --query 'app.defaultDomain' --output text)
+              echo "Frontend published: https://$BRANCH.$domain"
+              exit 0 ;;
+            FAILED|CANCELLED)
+              echo "::error::Amplify deployment $job_id ended with status $status"; exit 1 ;;
+          esac
+          sleep 10
+        done
+        echo "::error::Timed out waiting for Amplify deployment $job_id (last status: $status)"; exit 1

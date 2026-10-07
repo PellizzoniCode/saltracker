@@ -5,7 +5,7 @@ GitHub Actions tests every pull request and deploys to AWS on merge. It signs in
 | Event | Workflow | Result |
 |---|---|---|
 | Pull request to `develop` or `main` | `ci.yml` | Unit tests, `sam validate --lint`, `sam build`, frontend build. No AWS access. |
-| Push to `develop` (a merged PR counts) | `deploy.yml` | Tests, deploy `smart-asset-tracker-dev`, smoke test, build the frontend and publish it to the dev Amplify app. |
+| Push to `develop` (a merged PR counts) | `deploy.yml` | Tests, deploy `smart-asset-tracker-dev`, smoke test, then (only if the smoke test passes) build the frontend and publish it to the dev Amplify app. |
 
 **Production is not deployed yet.** Nothing in the workflows touches `smart-asset-tracker-prod`; see [Enabling prod](#enabling-prod) for what turning it on involves.
 
@@ -26,7 +26,7 @@ The shared checks live in `test.yml` and the shared deploy steps in `.github/act
 
 Pull requests and forks get a different subject that no role trusts, so they can never reach AWS. The dev deploy job must not declare `environment:`; doing so changes its subject and the dev role would refuse it.
 
-Both roles can only create IAM roles that carry the `saltracker-lambda-boundary` permission boundary, cannot remove it, and cannot modify the `saltracker-deploy-*` roles themselves.
+Each role can only create IAM roles that carry its own environment's permission boundary (`saltracker-lambda-boundary-dev` or `-prod`), cannot remove it, and cannot modify the `saltracker-deploy-*` roles themselves. Each boundary only reaches that environment's DynamoDB table, photo buckets, log groups and SNS topics, so the dev role cannot give a dev function access to prod data even when both environments share an account.
 
 ## Configuration reference
 
@@ -36,7 +36,7 @@ Everything a fork has to configure, in one place. The repository is public, so G
 |---|---|---|---|
 | GitHub secret | `AWS_ACCOUNT_ID` | Yes | 12-digit id of the AWS account that holds the bootstrap stack. The pipeline derives the deploy role, artifact bucket and permission boundary from it, and GitHub masks it in logs. |
 | GitHub variable | `AWS_REGION` | No (default `us-east-1`) | Region of the bootstrap and application stacks. |
-| GitHub variable | `DEV_PHOTO_UPLOAD_ORIGINS` | No | Comma-separated browser origins allowed to upload photos to the dev bucket. Blank keeps the template default. |
+| GitHub variable | `DEV_PHOTO_UPLOAD_ORIGINS` | Yes | Comma-separated browser origins allowed to upload photos to the dev bucket: the hosted frontend's origin, plus localhost if you also run it locally. The deploy fails if it is blank, because the template default only allows localhost and would break browser uploads from the hosted frontend. |
 | GitHub variables | `DEV_AMPLIFY_APP_ID`, `DEV_AMPLIFY_BRANCH` | No | Amplify app and branch to publish the dev frontend to. Blank skips the frontend. |
 | Bootstrap parameter | `GitHubOrg`, `GitHubRepo` | Yes | The repository whose workflows may assume the deploy roles. |
 | Bootstrap parameter | `GitHubSubjectPrefix` | If the repo uses the immutable subject | The `sub_claim_prefix` GitHub puts in its tokens (see below). |
@@ -44,13 +44,13 @@ Everything a fork has to configure, in one place. The repository is public, so G
 | Bootstrap parameter | `DevBranch` | No (default `develop`) | Branch whose pushes may assume the dev role. |
 | Bootstrap parameter | `AmplifyAppId` | No (default `*`) | Narrow the Amplify permission to one app once it exists. |
 
-The pipeline relies on these fixed names from the bootstrap template, so do not rename them without updating both sides (`backend/tests/test_ci_names.py` fails CI if they drift apart): role `saltracker-deploy-<env>`, bucket `saltracker-sam-artifacts-<account-id>-<region>`, policy `saltracker-lambda-boundary`, and stack `smart-asset-tracker-<env>`.
+The pipeline relies on these fixed names from the bootstrap template, so do not rename them without updating both sides (`backend/tests/test_ci_names.py` fails CI if they drift apart): role `saltracker-deploy-<env>`, bucket `saltracker-sam-artifacts-<account-id>-<region>`, policies `saltracker-lambda-boundary-<env>`, and stack `smart-asset-tracker-<env>`.
 
 ## One-time setup
 
 ### 1. Deploy the bootstrap stack (administrator, not the pipeline)
 
-The bootstrap stack creates the OIDC provider, both deploy roles, the permission boundary and the SAM artifact bucket. The stack is deliberately not deployed by the pipeline, so the pipeline can never widen its own permissions.
+The bootstrap stack creates the OIDC provider, both deploy roles, one permission boundary per environment and the SAM artifact bucket. The stack is deliberately not deployed by the pipeline, so the pipeline can never widen its own permissions.
 
 Read your repository's subject prefix first (only needed with the immutable subject; the command returns `sub_claim_prefix`):
 
@@ -73,6 +73,8 @@ aws cloudformation deploy \
     ExistingOidcProviderArn=<oidc-provider-arn>
 ```
 
+Redeploy the bootstrap stack whenever `ci-bootstrap.yaml` changes. When it moves a stack from the old shared `saltracker-lambda-boundary` to the per-environment boundaries, deploy the bootstrap stack first; the next deploy of each stack then re-attaches the new boundary to its Lambda roles, which the deploy role is allowed to do. IAM refuses to delete a policy that is still some role's boundary, so CloudFormation may fail to clean up the old shared policy during that first bootstrap deploy. That is harmless: once both stacks have been redeployed, run the bootstrap deploy again or delete `saltracker-lambda-boundary` by hand.
+
 If the role is later refused with `Not authorized to perform sts:AssumeRoleWithWebIdentity`, a wrong `GitHubSubjectPrefix` is the first thing to check. CloudTrail's rejected `AssumeRoleWithWebIdentity` events show the subject GitHub actually sent.
 
 ### 2. Configure GitHub
@@ -83,7 +85,7 @@ Set the secret first. Without `--body` the command prompts for the value, which 
 gh secret set AWS_ACCOUNT_ID
 ```
 
-Optional variables:
+Variables (`DEV_PHOTO_UPLOAD_ORIGINS` is required; the rest are optional):
 
 ```bash
 gh variable set AWS_REGION --body "<region>"
@@ -119,9 +121,9 @@ The dev role trusts pushes to `develop` (the bootstrap `DevBranch` parameter). T
 
 ## Frontend (Amplify)
 
-After each backend deploy the pipeline builds the frontend against the stack it just deployed (`VITE_API_URL`, `VITE_USER_POOL_ID`, `VITE_USER_POOL_CLIENT_ID` and `VITE_AWS_REGION` are read from the stack outputs and baked into the bundle), zips `frontend/dist`, uploads it to Amplify with a manual deployment, and waits for the Amplify job to finish. A failed Amplify deployment fails the pipeline, and the published URL is printed in the log.
+After the backend deploy and its smoke test pass, the `publish-frontend-dev` job builds the frontend against the stack that was just deployed (`VITE_API_URL`, `VITE_USER_POOL_ID`, `VITE_USER_POOL_CLIENT_ID` and `VITE_AWS_REGION` are read from the stack outputs and baked into the bundle), zips `frontend/dist`, uploads it to Amplify with a manual deployment, and waits for the Amplify job to finish. A failed Amplify deployment fails the pipeline, and the published URL is printed in the log.
 
-Amplify is not in the SAM template. This works only with a **manual-deploy** Amplify app, one created without a Git repository. An app connected to Git does not accept manual deployments, and it would also build the site itself without the stack's values. Skipping the frontend is safe: leave `DEV_AMPLIFY_APP_ID` blank.
+Amplify is not in the SAM template. This works only with a **manual-deploy** Amplify app, one created without a Git repository. An app connected to Git does not accept manual deployments, and it would also build the site itself without the stack's values. Skipping the frontend is safe: leave `DEV_AMPLIFY_APP_ID` blank and the job is skipped. If the smoke test fails, the frontend is not published.
 
 ### One-time setup (dev)
 
@@ -141,7 +143,7 @@ Amplify is not in the SAM template. This works only with a **manual-deploy** Amp
 
 4. Redeploy the bootstrap stack with `AmplifyAppId=<amplify-app-id>` added to `--parameter-overrides`, so the deploy role can publish to that app only.
 
-5. Merge to `develop` (or re-run the workflow). The dev deploy now ends with the frontend published.
+5. Merge to `develop` (or re-run the workflow). The dev deploy now ends with the frontend published, after the smoke test.
 
 Prod would need its own Amplify app and branch; see [Enabling prod](#enabling-prod).
 
@@ -166,6 +168,7 @@ CloudFormation rolls a failed update back automatically and the job fails. To ro
   ```
 
   A deploy that adds the permission boundary to Lambda roles that did not have it yet can fail on rollback this way, because the deploy role may not remove the boundary. Stacks created by the pipeline are not affected.
+- **`Photo upload origins are not set`**: set `DEV_PHOTO_UPLOAD_ORIGINS` to the hosted frontend origin (see above). It is required so a deploy never drops the origin the hosted frontend uploads from.
 - **`AccessDenied` from the deploy role in the deploy log**: look at the rejected call in CloudTrail and add only that action to `ci-bootstrap.yaml`, then redeploy the bootstrap stack.
 - **`log group already exists` / bucket name conflicts**: leftovers from an earlier stack; see [cloudwatch-monitoring.md](cloudwatch-monitoring.md).
 

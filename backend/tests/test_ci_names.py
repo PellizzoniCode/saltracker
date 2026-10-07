@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[2]
 BOOTSTRAP = (ROOT / "infrastructure" / "ci-bootstrap.yaml").read_text()
 ACTION = (ROOT / ".github" / "actions" / "deploy-stack" / "action.yml").read_text()
 DEPLOY = (ROOT / ".github" / "workflows" / "deploy.yml").read_text()
+PUBLISH = (ROOT / ".github" / "actions" / "publish-frontend" / "action.yml").read_text()
 
 # The deploy action derives AWS resource names from the account id instead of
 # taking them as GitHub variables (variables are not masked in public logs).
@@ -42,9 +43,46 @@ class CiNameTests(unittest.TestCase):
         for env in ("dev", "prod"):
             self.assertIn("${SamArtifactBucket.Arn}/%s/*" % env, BOOTSTRAP)
 
-    def test_permission_boundary_matches_the_bootstrap_policy(self):
-        self.assertIn("saltracker-lambda-boundary", bootstrap_value("ManagedPolicyName"))
-        self.assertIn(":policy/saltracker-lambda-boundary", ACTION)
+    def test_permission_boundaries_match_the_bootstrap_policies(self):
+        for env in ("dev", "prod"):
+            self.assertIn("saltracker-lambda-boundary-%s" % env, bootstrap_value("ManagedPolicyName"))
+        self.assertIn(":policy/saltracker-lambda-boundary-${{ inputs.environment }}", ACTION)
+
+    def test_each_deploy_role_may_only_create_roles_with_its_own_boundary(self):
+        self.assertIn("iam:PermissionsBoundary: !Ref LambdaPermissionBoundaryDev", BOOTSTRAP)
+        self.assertIn("iam:PermissionsBoundary: !Ref LambdaPermissionBoundaryProd", BOOTSTRAP)
+        self.assertNotIn("!Ref LambdaPermissionBoundary\n", BOOTSTRAP)
+
+    def test_boundaries_do_not_reach_the_other_environment(self):
+        def policy(resource):
+            start = BOOTSTRAP.index("\n  %s:\n" % resource) + 1
+            following = re.search(r"^  \S", BOOTSTRAP[start + 1:], re.MULTILINE)
+            return BOOTSTRAP[start : start + 1 + following.start()]
+
+        for env, other in (("dev", "prod"), ("prod", "dev")):
+            text = policy("LambdaPermissionBoundary%s" % env.capitalize())
+            self.assertIn("smart-asset-tracker-%s" % env, text)
+            self.assertNotIn(other, text)
+            # No wildcard may span environments.
+            self.assertNotIn("table/smart-asset-tracker-*", text)
+            self.assertNotIn("smart-asset-tracker-*-photos", text)
+            self.assertNotIn("log-group:/aws/lambda/smart-asset-*:*", text)
+
+    def test_sam_deploy_uses_the_configured_region_not_samconfig(self):
+        self.assertIn('--region "$REGION"', ACTION)
+        self.assertIn("REGION: ${{ inputs.region }}", ACTION)
+
+    def test_photo_upload_origins_are_required_for_every_environment(self):
+        self.assertRegex(ACTION, r"photo-upload-origins:\n(?:    .*\n)*?    required: true")
+        self.assertIn('[ -z "$PHOTO_UPLOAD_ORIGINS" ]', ACTION)
+        self.assertNotIn('"$ENVIRONMENT" = prod', ACTION)
+
+    def test_frontend_is_published_only_after_the_smoke_test(self):
+        self.assertNotIn("aws amplify", ACTION)
+        self.assertNotIn("inputs.amplify", ACTION)
+        self.assertIn("needs: smoke-dev", DEPLOY.split("publish-frontend-dev:")[1])
+        self.assertIn("./.github/actions/publish-frontend", DEPLOY)
+        self.assertIn(":role/saltracker-deploy-${{ inputs.environment }}", PUBLISH)
 
     def test_stack_names_match_what_the_deploy_roles_may_change(self):
         self.assertIn('--stack-name "smart-asset-tracker-$ENVIRONMENT"', ACTION)

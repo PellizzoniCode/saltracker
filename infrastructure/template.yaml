@@ -40,7 +40,8 @@ Parameters:
       Optional IAM permission boundary attached to every Lambda execution role.
       The CI deploy roles (infrastructure/ci-bootstrap.yaml) can only create
       roles that carry it, so the pipeline passes the bootstrap stack's
-      LambdaPermissionBoundaryArn output. Leave blank for manual deploys.
+      LambdaPermissionBoundaryDevArn or LambdaPermissionBoundaryProdArn output
+      for this environment. Leave blank for manual deploys.
 
 Conditions:
   HasPermissionsBoundary: !Not [!Equals [!Ref PermissionsBoundaryArn, '']]

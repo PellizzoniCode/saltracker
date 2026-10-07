@@ -1,9 +1,9 @@
 name: Deploy stack
 description: >-
-  Assume the environment's AWS deploy role over OIDC, build and deploy the SAM
-  stack, then build the frontend against the stack's outputs and publish it to
-  AWS Amplify. The caller must check out the repo first and grant the job
-  `id-token: write`.
+  Assume the environment's AWS deploy role over OIDC, then build and deploy the
+  SAM stack. The frontend is published separately by the publish-frontend
+  action, after the smoke test. The caller must check out the repo first and
+  grant the job `id-token: write`.
 
 inputs:
   environment:
@@ -18,16 +18,11 @@ inputs:
       the two in sync.
     required: true
   photo-upload-origins:
-    description: Comma-separated browser origins allowed to upload photos. Required for prod.
-    default: ''
-  amplify-app-id:
     description: >-
-      Amplify app to publish to. It must be a manual-deploy app (created without a Git
-      repository). Leave empty to skip the frontend steps.
-    default: ''
-  amplify-branch:
-    description: Amplify branch to publish to
-    default: ''
+      Comma-separated browser origins allowed to upload photos. Required: the template
+      default only allows localhost, so leaving it empty would drop the hosted frontend's
+      origin from the photo bucket CORS rules and break browser uploads.
+    required: true
   region:
     default: us-east-1
 
@@ -37,7 +32,6 @@ runs:
     - name: Check inputs
       shell: bash
       env:
-        ENVIRONMENT: ${{ inputs.environment }}
         PHOTO_UPLOAD_ORIGINS: ${{ inputs.photo-upload-origins }}
         ACCOUNT_ID: ${{ inputs.account-id }}
       run: |
@@ -45,9 +39,10 @@ runs:
           echo "::error::The AWS_ACCOUNT_ID secret is missing or not a 12-digit account id. Set it with: gh secret set AWS_ACCOUNT_ID (see README, Set up the CI/CD pipeline)."
           exit 1
         fi
-        # The template default allows the dev Amplify URL and localhost; never ship that to prod.
-        if [ "$ENVIRONMENT" = prod ] && [ -z "$PHOTO_UPLOAD_ORIGINS" ]; then
-          echo "::error::PHOTO_UPLOAD_ORIGINS must be set on the prod environment."
+        # The template default only allows localhost. Deploying without the hosted frontend's
+        # origin would silently break browser photo uploads, so require it for every environment.
+        if [ -z "$PHOTO_UPLOAD_ORIGINS" ]; then
+          echo "::error::Photo upload origins are not set. Set the DEV_PHOTO_UPLOAD_ORIGINS variable (PHOTO_UPLOAD_ORIGINS for prod) to the hosted frontend origin, e.g. https://<branch>.<amplify-app-id>.amplifyapp.com, optionally with http://localhost:5173."
           exit 1
         fi
 
@@ -70,85 +65,17 @@ runs:
       env:
         ENVIRONMENT: ${{ inputs.environment }}
         ARTIFACT_BUCKET: saltracker-sam-artifacts-${{ inputs.account-id }}-${{ inputs.region }}
-        BOUNDARY_ARN: arn:aws:iam::${{ inputs.account-id }}:policy/saltracker-lambda-boundary
+        BOUNDARY_ARN: arn:aws:iam::${{ inputs.account-id }}:policy/saltracker-lambda-boundary-${{ inputs.environment }}
         PHOTO_UPLOAD_ORIGINS: ${{ inputs.photo-upload-origins }}
+        REGION: ${{ inputs.region }}
       run: |
-        overrides=("Environment=$ENVIRONMENT" "PermissionsBoundaryArn=$BOUNDARY_ARN")
-        if [ -n "$PHOTO_UPLOAD_ORIGINS" ]; then
-          overrides+=("PhotoUploadOrigins=\"$PHOTO_UPLOAD_ORIGINS\"")
-        fi
-        # --no-resolve-s3 overrides the dev-only samconfig.toml, which turns on resolve_s3.
+        overrides=("Environment=$ENVIRONMENT" "PermissionsBoundaryArn=$BOUNDARY_ARN" "PhotoUploadOrigins=\"$PHOTO_UPLOAD_ORIGINS\"")
+        # --no-resolve-s3 and --region override the dev-only samconfig.toml, which turns on
+        # resolve_s3 and pins us-east-1; the credentials and artifact bucket use inputs.region.
         sam deploy \
+          --region "$REGION" \
           --stack-name "smart-asset-tracker-$ENVIRONMENT" \
           --s3-bucket "$ARTIFACT_BUCKET" --s3-prefix "$ENVIRONMENT" --no-resolve-s3 \
           --capabilities CAPABILITY_IAM \
           --parameter-overrides "${overrides[@]}" \
           --no-confirm-changeset --no-fail-on-empty-changeset
-
-    - name: Set up Node
-      if: inputs.amplify-app-id != ''
-      uses: actions/setup-node@v7
-      with:
-        node-version: 20
-        cache: npm
-        cache-dependency-path: frontend/package-lock.json
-
-    - name: Build frontend
-      if: inputs.amplify-app-id != ''
-      shell: bash
-      working-directory: frontend
-      env:
-        ENVIRONMENT: ${{ inputs.environment }}
-        REGION: ${{ inputs.region }}
-      run: |
-        stack="smart-asset-tracker-$ENVIRONMENT"
-        output() {
-          aws cloudformation describe-stacks --stack-name "$stack" \
-            --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text
-        }
-        # Vite bakes these into the bundle, so they must come from the stack just deployed.
-        export VITE_AWS_REGION="$REGION"
-        VITE_API_URL="$(output ApiUrl)"
-        VITE_USER_POOL_ID="$(output UserPoolId)"
-        VITE_USER_POOL_CLIENT_ID="$(output UserPoolClientId)"
-        export VITE_API_URL VITE_USER_POOL_ID VITE_USER_POOL_CLIENT_ID
-        for name in VITE_API_URL VITE_USER_POOL_ID VITE_USER_POOL_CLIENT_ID; do
-          if [ -z "${!name}" ] || [ "${!name}" = None ]; then
-            echo "::error::Stack output for $name is missing"; exit 1
-          fi
-        done
-        npm ci
-        npm run build
-
-    - name: Publish frontend to Amplify
-      if: inputs.amplify-app-id != ''
-      shell: bash
-      env:
-        APP_ID: ${{ inputs.amplify-app-id }}
-        BRANCH: ${{ inputs.amplify-branch }}
-      run: |
-        if [ -z "$BRANCH" ]; then
-          echo "::error::amplify-branch is required when amplify-app-id is set"; exit 1
-        fi
-        (cd frontend/dist && zip -qr ../site.zip .)
-        read -r job_id upload_url < <(aws amplify create-deployment --app-id "$APP_ID" --branch-name "$BRANCH" \
-          --query '[jobId,zipUploadUrl]' --output text)
-        curl -sS --fail -T frontend/site.zip "$upload_url"
-        aws amplify start-deployment --app-id "$APP_ID" --branch-name "$BRANCH" --job-id "$job_id" > /dev/null
-        echo "Started Amplify deployment $job_id for $APP_ID/$BRANCH"
-
-        # Wait for the result so a broken frontend fails the pipeline (about 10 minutes at most).
-        for _ in $(seq 1 60); do
-          status=$(aws amplify get-job --app-id "$APP_ID" --branch-name "$BRANCH" --job-id "$job_id" \
-            --query 'job.summary.status' --output text)
-          case "$status" in
-            SUCCEED)
-              domain=$(aws amplify get-app --app-id "$APP_ID" --query 'app.defaultDomain' --output text)
-              echo "Frontend published: https://$BRANCH.$domain"
-              exit 0 ;;
-            FAILED|CANCELLED)
-              echo "::error::Amplify deployment $job_id ended with status $status"; exit 1 ;;
-          esac
-          sleep 10
-        done
-        echo "::error::Timed out waiting for Amplify deployment $job_id (last status: $status)"; exit 1
