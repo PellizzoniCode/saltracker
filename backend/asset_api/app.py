@@ -539,8 +539,12 @@ def _update(event, asset_id, claims, groups):
     if not validate_update_permissions(groups, changed_fields):
         return response(403, {"error": "Forbidden", "message": "You do not have permission to update these asset fields."})
 
+    current = _clean_asset(existing)
+    # DynamoDB returns numbers as Decimal; validation expects an int.
+    if isinstance(current.get("usefulLifeMonths"), Decimal):
+        current["usefulLifeMonths"] = int(current["usefulLifeMonths"])
     candidate = {
-        **_clean_asset(existing),
+        **current,
         **{
             key: value
             for key, value in payload.items()
