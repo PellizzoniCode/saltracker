@@ -10,6 +10,7 @@
 #                                     create a confirmed Cognito user in GROUP
 #                                     (prompts for the password unless -p is given)
 #   scripts/dev.sh web                start the Vite dev server
+#   scripts/dev.sh smoke [--image F]  smoke-test the deployed stack; writes smoke-test-results.md
 #   scripts/dev.sh down [--purge]     delete the stack (--purge also deletes the retained table)
 #
 # Override defaults with STACK_NAME, AWS_REGION, ENVIRONMENT (dev or test).
@@ -295,6 +296,11 @@ cmd_down() {
   fi
 }
 
+cmd_smoke() {
+  require aws python3
+  python3 scripts/smoke_test.py --env "$ENVIRONMENT" --stack "$STACK_NAME" --region "$AWS_REGION" "$@"
+}
+
 cmd_up() {
   cmd_test
   cmd_deploy
@@ -313,7 +319,8 @@ case "${1:-up}" in
   seed)   cmd_seed ;;
   user)   shift; cmd_user "$@" ;;
   web)    cmd_web ;;
+  smoke)  shift; cmd_smoke "$@" ;;
   down)   shift; cmd_down "$@" ;;
-  -h|--help|help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' ;;
+  -h|--help|help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//' ;;
   *)      die "Unknown command '$1'. Run 'scripts/dev.sh help'." ;;
 esac

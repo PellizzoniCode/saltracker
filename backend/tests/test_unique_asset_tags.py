@@ -330,5 +330,21 @@ class ClaimPendingPhotoTests(unittest.TestCase):
         self.s3.delete_object.assert_not_called()
 
 
+    def test_update_accepts_stored_decimal_useful_life(self):
+        # DynamoDB returns numbers as Decimal, so a partial update must not
+        # reject the stored usefulLifeMonths.
+        from decimal import Decimal
+
+        existing = {
+            **ASSET, "assetId": "AST-OWN", "PK": "ASSET#AST-OWN", "SK": "METADATA",
+            "usefulLifeMonths": Decimal("48"),
+        }
+        self.table.get_item.return_value = {"Item": existing}
+        event = {"body": json.dumps({"description": "Updated description"})}
+
+        result = self.api._update(event, "AST-OWN", {"sub": "admin"}, {"Administrator"})
+
+        self.assertEqual(result["statusCode"], 200)
+
 if __name__ == "__main__":
     unittest.main()
