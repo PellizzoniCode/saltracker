@@ -1,0 +1,45 @@
+name: Test
+
+# Reusable checks shared by CI (pull requests) and Deploy (pushes), so the two
+# can never drift apart. Needs no AWS credentials.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Unit tests
+        run: python -m unittest discover -s backend/tests -v
+      - uses: aws-actions/setup-sam@v3
+      - name: Validate SAM templates
+        run: |
+          sam validate --lint --template-file infrastructure/template.yaml
+          sam validate --lint --template-file infrastructure/ci-bootstrap.yaml
+        env:
+          AWS_DEFAULT_REGION: us-east-1
+      - name: Build SAM application
+        run: sam build --template-file infrastructure/template.yaml
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      # VITE_* values are read in the browser at runtime, so the build needs none.
+      - run: npm run build

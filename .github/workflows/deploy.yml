@@ -1,0 +1,91 @@
+name: Deploy
+
+# A merge (push) to develop runs the tests, deploys the dev stack, runs the smoke
+# test and, only if that passes, publishes the frontend to Amplify. Credentials
+# come from GitHub OIDC; see docs/ci-cd.md.
+#
+# Production is not deployed from here yet. The prod job (GitHub Environment with
+# required reviewers, then a health check) is in git history at 5137944 and is
+# described in docs/ci-cd.md under "Enabling prod".
+on:
+  push:
+    branches: [develop]
+  # Manual re-run, e.g. after fixing the Amplify setup. Run it from `develop`: the
+  # dev role only trusts that branch.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time; a queued run waits instead of cancelling a deploy mid-flight.
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
+  deploy-dev:
+    needs: test
+    runs-on: ubuntu-latest
+    # No `environment:` here on purpose: it would change the OIDC subject to
+    # environment:<name>, which the dev role does not trust (it trusts the branch).
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/deploy-stack
+        with:
+          environment: dev
+          account-id: ${{ secrets.AWS_ACCOUNT_ID }}
+          region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          photo-upload-origins: ${{ vars.DEV_PHOTO_UPLOAD_ORIGINS }}
+
+  smoke-dev:
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/saltracker-deploy-dev
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          mask-aws-account-id: true
+      - name: Smoke test
+        run: python scripts/smoke_test.py --env dev --output smoke-test-results.md
+      - name: Add report to the run summary
+        if: always()
+        run: '[ -f smoke-test-results.md ] && cat smoke-test-results.md >> "$GITHUB_STEP_SUMMARY" || true'
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: smoke-test-results
+          path: smoke-test-results.md
+          if-no-files-found: ignore
+
+  # Publishing last means a backend that fails its smoke test never gets a new frontend.
+  # Skipped when no Amplify app is configured. Like deploy-dev, no `environment:`.
+  publish-frontend-dev:
+    needs: smoke-dev
+    if: vars.DEV_AMPLIFY_APP_ID != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/publish-frontend
+        with:
+          environment: dev
+          account-id: ${{ secrets.AWS_ACCOUNT_ID }}
+          region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          amplify-app-id: ${{ vars.DEV_AMPLIFY_APP_ID }}
+          amplify-branch: ${{ vars.DEV_AMPLIFY_BRANCH }}

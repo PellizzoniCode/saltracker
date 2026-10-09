@@ -88,6 +88,58 @@ sam delete --stack-name smart-asset-tracker-dev
 `down --purge` deletes the retained table after deleting the stack; the retained
 photo bucket and its contents must be removed separately if no longer needed.
 
+## Set up the CI/CD pipeline
+
+Merging to `develop` deploys the dev stack, runs the smoke test and then publishes the frontend to Amplify, using GitHub Actions with OIDC, so no AWS keys are stored. Production is not deployed automatically yet. The pipeline does nothing until you complete this one-time setup (details and troubleshooting: [docs/ci-cd.md](docs/ci-cd.md)).
+
+**You need:** a non-production AWS account, admin credentials for the one-time step, and the [GitHub CLI](https://cli.github.com/) logged in with admin rights on your repository.
+
+1. **Deploy the bootstrap stack** once, with admin credentials. It creates the deploy roles GitHub assumes. Replace the placeholders; `GitHubSubjectPrefix` is only needed if the repository uses GitHub's immutable subject claim (read it with `gh api repos/<org>/<repo>/actions/oidc/customization/sub`, field `sub_claim_prefix`), and `ExistingOidcProviderArn` only if the account already has a GitHub OIDC provider:
+
+   ```bash
+   aws cloudformation deploy --template-file infrastructure/ci-bootstrap.yaml --stack-name saltracker-ci-bootstrap --region <region> --capabilities CAPABILITY_NAMED_IAM --parameter-overrides GitHubOrg=<org> GitHubRepo=<repo> GitHubSubjectPrefix=<sub_claim_prefix> ExistingOidcProviderArn=<oidc-provider-arn>
+   ```
+
+2. **Set the secret** the pipeline needs. Without `--body` it prompts, which keeps the account id out of your shell history:
+
+   ```bash
+   gh secret set AWS_ACCOUNT_ID
+   ```
+
+3. **Set variables** (`DEV_PHOTO_UPLOAD_ORIGINS` is required, the others have defaults; the repository is public, so never put account-specific values in variables, they are not masked in logs):
+
+   ```bash
+   gh variable set AWS_REGION --body "us-east-1"
+   ```
+
+   ```bash
+   gh variable set DEV_PHOTO_UPLOAD_ORIGINS --body "https://<branch>.<amplify-app-id>.amplifyapp.com,http://localhost:5173"
+   ```
+
+   ```bash
+   gh variable set DEV_AMPLIFY_APP_ID --body "<amplify-app-id>"
+   ```
+
+   ```bash
+   gh variable set DEV_AMPLIFY_BRANCH --body "<branch>"
+   ```
+
+   Leave the two Amplify variables unset to skip publishing the frontend. Publishing needs a manual-deploy Amplify app, created as described in [docs/ci-cd.md](docs/ci-cd.md#frontend-amplify).
+
+4. **Check** what is configured (secret values are never shown):
+
+   ```bash
+   gh secret list
+   ```
+
+   ```bash
+   gh variable list
+   ```
+
+5. **Merge to `develop`.** Watch the **Deploy** run in the Actions tab; the smoke-test report is on the run summary.
+
+If a run fails: a denied role assumption usually means a wrong `GitHubSubjectPrefix`, and a stack stuck in `UPDATE_ROLLBACK_FAILED` is recovered with `aws cloudformation continue-update-rollback`; both are covered in the [troubleshooting section](docs/ci-cd.md#troubleshooting).
+
 ## Run the frontend
 
 ```bash

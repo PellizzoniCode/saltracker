@@ -36,3 +36,6 @@ coverage/
 .DS_Store
 Thumbs.db
 smoke-test-results.md
+
+# Local Claude Code settings and worktrees
+.claude/

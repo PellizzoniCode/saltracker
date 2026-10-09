@@ -26,8 +26,25 @@ Parameters:
       is active. Keep Disabled on an existing environment until
       scripts/migrate_pending_photos.py --verify passes, then redeploy with
       Enabled (see docs/photo-storage-migration.md).
+  PhotoUploadOrigins:
+    Type: CommaDelimitedList
+    Default: http://localhost:5173,http://localhost:5180
+    Description: >-
+      Browser origins allowed to POST photos straight to the photo bucket.
+      Add that environment's Amplify URL (the CI pipeline passes it from the
+      DEV_PHOTO_UPLOAD_ORIGINS variable).
+  PermissionsBoundaryArn:
+    Type: String
+    Default: ''
+    Description: >-
+      Optional IAM permission boundary attached to every Lambda execution role.
+      The CI deploy roles (infrastructure/ci-bootstrap.yaml) can only create
+      roles that carry it, so the pipeline passes the bootstrap stack's
+      LambdaPermissionBoundaryDevArn or LambdaPermissionBoundaryProdArn output
+      for this environment. Leave blank for manual deploys.
 
 Conditions:
+  HasPermissionsBoundary: !Not [!Equals [!Ref PermissionsBoundaryArn, '']]
   HasAlertEmail: !Not [!Equals [!Ref AlertEmail, '']]
   HasMaintenanceNotificationEmail: !Not
     - !Equals
@@ -41,6 +58,7 @@ Globals:
     Timeout: 15
     MemorySize: 256
     Tracing: Active
+    PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundaryArn, !Ref AWS::NoValue]
     Environment:
       Variables:
         ASSET_TABLE_NAME: !Ref AssetTable
@@ -139,10 +157,7 @@ Resources:
       CorsConfiguration:
         CorsRules:
           - AllowedMethods: [POST]
-            AllowedOrigins:
-              - https://main.dx980x98nt3d5.amplifyapp.com
-              - http://localhost:5173
-              - http://localhost:5180
+            AllowedOrigins: !Ref PhotoUploadOrigins
             AllowedHeaders: ['*']
             MaxAge: 300
       LifecycleConfiguration:
