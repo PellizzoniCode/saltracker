@@ -356,14 +356,15 @@ def _photo_analysis_key(photo_key):
     }
 
 
-def _get_photo(asset_id, claims, groups):
-    item = TABLE.get_item(
+def _load_readable_asset(asset_id, claims, groups, denied_message):
+    """Return (asset, None) or (None, error response)."""
+    asset = TABLE.get_item(
         Key=_asset_key(asset_id),
         ConsistentRead=True,
     ).get("Item")
 
-    if not item:
-        return response(
+    if not asset:
+        return None, response(
             404,
             {
                 "error": "NotFound",
@@ -371,17 +372,31 @@ def _get_photo(asset_id, claims, groups):
             },
         )
 
-    if not can_read(groups, claims, item):
-        return response(
+    if not can_read(groups, claims, asset):
+        return None, response(
             403,
             {
                 "error": "Forbidden",
-                "message": (
-                    "You do not have permission to view "
-                    "this asset photograph."
-                ),
+                "message": denied_message,
             },
         )
+
+    return asset, None
+
+
+def _get_photo(asset_id, claims, groups):
+    item, error = _load_readable_asset(
+        asset_id,
+        claims,
+        groups,
+        (
+            "You do not have permission to view "
+            "this asset photograph."
+        ),
+    )
+
+    if error:
+        return error
 
     photo_key = item.get("imageKey")
 
@@ -650,30 +665,15 @@ def _find_maintenance(asset_id, maintenance_id):
 
 def _authorized_maintenance(asset_id, maintenance_id, claims, groups):
     """Return (record, None) or (None, error response)."""
-    asset = TABLE.get_item(
-        Key=_asset_key(asset_id),
-        ConsistentRead=True,
-    ).get("Item")
+    asset, error = _load_readable_asset(
+        asset_id,
+        claims,
+        groups,
+        "You cannot change maintenance for this asset.",
+    )
 
-    if not asset:
-        return None, response(
-            404,
-            {
-                "error": "NotFound",
-                "message": "Asset was not found.",
-            },
-        )
-
-    if not can_read(groups, claims, asset):
-        return None, response(
-            403,
-            {
-                "error": "Forbidden",
-                "message": (
-                    "You cannot change maintenance for this asset."
-                ),
-            },
-        )
+    if error:
+        return None, error
 
     # can_read lets Auditors see every department, so a Technician who is
     # also an Auditor would pass it. Changes stay scoped to the caller's
@@ -709,28 +709,15 @@ def _authorized_maintenance(asset_id, maintenance_id, claims, groups):
 
 
 def _create_maintenance(event, asset_id, claims, groups):
-    asset = TABLE.get_item(
-        Key=_asset_key(asset_id),
-        ConsistentRead=True,
-    ).get("Item")
+    asset, error = _load_readable_asset(
+        asset_id,
+        claims,
+        groups,
+        "You cannot add maintenance to this asset.",
+    )
 
-    if not asset:
-        return response(
-            404,
-            {
-                "error": "NotFound",
-                "message": "Asset was not found.",
-            },
-        )
-
-    if not can_read(groups, claims, asset):
-        return response(
-            403,
-            {
-                "error": "Forbidden",
-                "message": "You cannot add maintenance to this asset.",
-            },
-        )
+    if error:
+        return error
 
     if (
         "Administrator" not in groups
@@ -1021,31 +1008,18 @@ def _delete_maintenance(asset_id, maintenance_id, claims, groups):
 
 
 def _list_maintenance(asset_id, claims, groups):
-    asset = TABLE.get_item(
-        Key=_asset_key(asset_id),
-        ConsistentRead=True,
-    ).get("Item")
+    asset, error = _load_readable_asset(
+        asset_id,
+        claims,
+        groups,
+        (
+            "You do not have permission to view "
+            "maintenance for this asset."
+        ),
+    )
 
-    if not asset:
-        return response(
-            404,
-            {
-                "error": "NotFound",
-                "message": "Asset was not found.",
-            },
-        )
-
-    if not can_read(groups, claims, asset):
-        return response(
-            403,
-            {
-                "error": "Forbidden",
-                "message": (
-                    "You do not have permission to view "
-                    "maintenance for this asset."
-                ),
-            },
-        )
+    if error:
+        return error
     params = {
         "KeyConditionExpression": (
             "PK = :pk AND begins_with(SK, :maintenance)"
@@ -1098,31 +1072,18 @@ def _generate_maintenance_recommendation(
     claims,
     groups,
 ):
-    asset = TABLE.get_item(
-        Key=_asset_key(asset_id),
-        ConsistentRead=True,
-    ).get("Item")
+    asset, error = _load_readable_asset(
+        asset_id,
+        claims,
+        groups,
+        (
+            "You cannot generate recommendations "
+            "for this asset."
+        ),
+    )
 
-    if not asset:
-        return response(
-            404,
-            {
-                "error": "NotFound",
-                "message": "Asset was not found.",
-            },
-        )
-
-    if not can_read(groups, claims, asset):
-        return response(
-            403,
-            {
-                "error": "Forbidden",
-                "message": (
-                    "You cannot generate recommendations "
-                    "for this asset."
-                ),
-            },
-        )
+    if error:
+        return error
 
     if (
         "Administrator" not in groups
