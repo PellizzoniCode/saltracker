@@ -26,8 +26,15 @@
 
 ## Automated Test Result
 
-The Week 4 security test suite validates authentication, authorization,
-input handling, and unsupported HTTP methods.
+`backend/tests/test_security_requirements.py` validates authentication,
+authorization, input handling, and unsupported HTTP methods at the Lambda
+handler. It also checks the SAM template (Cognito default authorizer, only the
+health endpoint unauthenticated, S3 Block Public Access), the 300-second
+presigned URL lifetime, and scans tracked files for committed credentials.
+
+Checks that need a live deployment (invalid-token 401 from API Gateway, public
+S3 access returning 403, a presigned URL returning 200) are performed manually
+and are listed in the table above.
 
 Result: All security tests passed.
 

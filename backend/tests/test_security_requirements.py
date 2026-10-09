@@ -2,11 +2,15 @@
 
 import json
 import pathlib
+import re
+import subprocess
 import sys
 import unittest
 
 
 TEST_DIR = pathlib.Path(__file__).resolve().parent
+REPO_ROOT = TEST_DIR.parent.parent
+TEMPLATE = REPO_ROOT / "infrastructure" / "template.yaml"
 sys.path.insert(0, str(TEST_DIR))
 
 from test_unique_asset_tags import _load_api  # noqa: E402
@@ -67,7 +71,7 @@ def authenticated_event(
 
 class SecurityRequirementTests(unittest.TestCase):
     def setUp(self):
-        self.api, self.table, self.transactions = _load_api()
+        self.api, self.table, self.transactions, self.s3 = _load_api()
 
     def response_body(self, result):
         return json.loads(result["body"])
@@ -161,6 +165,111 @@ class SecurityRequirementTests(unittest.TestCase):
 
         self.assertEqual(result["statusCode"], 403)
         self.assertEqual(body["error"], "Forbidden")
+
+    def test_recommendation_for_asset_without_dates_returns_422(self):
+        undated = {
+            key: value
+            for key, value in ASSET.items()
+            if key not in {"inServiceDate", "purchaseDate"}
+        }
+        self.table.get_item.return_value = {"Item": undated}
+        self.table.query.return_value = {"Items": []}
+
+        event = authenticated_event(
+            "POST",
+            "/assets/{assetId}/maintenance-recommendation",
+            asset_id="AST-SECURITY",
+        )
+
+        result = self.api.lambda_handler(event, None)
+
+        self.assertEqual(result["statusCode"], 422)
+        self.assertEqual(
+            self.response_body(result)["error"],
+            "MaintenanceScheduleUnavailable",
+        )
+
+
+class InfrastructureSecurityTests(unittest.TestCase):
+    """Static checks on the SAM template; live checks stay manual."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.template = TEMPLATE.read_text()
+
+    def resource_block(self, name):
+        match = re.search(
+            rf"^  {name}:\n(.*?)(?=^  [A-Za-z0-9]+:\n|^Outputs:)",
+            self.template,
+            re.MULTILINE | re.DOTALL,
+        )
+        self.assertIsNotNone(match, f"{name} is missing from the template")
+        return match.group(1)
+
+    def test_api_uses_cognito_authorizer_by_default(self):
+        block = self.resource_block("AssetApi")
+
+        self.assertIn("DefaultAuthorizer: CognitoAuthorizer", block)
+        self.assertIn("UserPoolArn: !GetAtt UserPool.Arn", block)
+
+    def test_only_health_endpoint_is_unauthenticated(self):
+        self.assertEqual(self.template.count("Authorizer: NONE"), 1)
+        self.assertIn("Authorizer: NONE", self.resource_block("HealthFunction"))
+
+    def test_photo_bucket_blocks_all_public_access(self):
+        block = self.resource_block("AssetPhotoBucket")
+
+        for setting in (
+            "BlockPublicAcls",
+            "BlockPublicPolicy",
+            "IgnorePublicAcls",
+            "RestrictPublicBuckets",
+        ):
+            self.assertIn(f"{setting}: true", block)
+
+    def test_photo_urls_are_short_lived(self):
+        api, *_ = _load_api()
+
+        self.assertLessEqual(api.PHOTO_URL_EXPIRES_IN, 300)
+
+    def test_tracked_files_contain_no_credentials(self):
+        try:
+            tracked = subprocess.run(
+                ["git", "ls-files"],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.splitlines()
+        except (OSError, subprocess.CalledProcessError):
+            self.skipTest("git is not available")
+
+        patterns = [
+            re.compile(r"AKIA[0-9A-Z]{16}"),
+            re.compile(r"ASIA[0-9A-Z]{16}"),
+            re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+            re.compile(r"aws_secret_access_key\s*=\s*\S+", re.IGNORECASE),
+        ]
+        text_suffixes = {
+            ".py", ".js", ".jsx", ".json", ".yaml", ".yml", ".toml",
+            ".sh", ".md", ".html", ".css", ".env", ".txt",
+        }
+        findings = []
+
+        for name in tracked:
+            path = REPO_ROOT / name
+
+            if path.suffix not in text_suffixes or not path.is_file():
+                continue
+
+            content = path.read_text(errors="ignore")
+            findings.extend(
+                f"{name}: {pattern.pattern}"
+                for pattern in patterns
+                if pattern.search(content)
+            )
+
+        self.assertEqual(findings, [])
 
 
 if __name__ == "__main__":

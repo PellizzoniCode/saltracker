@@ -41,6 +41,7 @@ Return only one valid JSON object with exactly these fields:
 
 {
   "category": "string",
+  "manufacturer": null,
   "model": null,
   "description": "string",
   "condition": "Good, Fair, Poor, or Unknown",
@@ -88,6 +89,8 @@ Classification rules:
 Additional rules:
 
 - Do not invent information that cannot be verified from the photograph.
+- Set manufacturer only when a logo or label makes it clearly visible.
+  Otherwise return null.
 - Set model only when it is clearly visible or can be identified confidently
   from distinctive physical characteristics. Otherwise return null.
 - Do not guess an exact model from general appearance alone.
@@ -155,18 +158,19 @@ def validate_suggestion(raw_text):
 
         suggestion[field] = value
 
-    model = result.get("model")
+    for field in ("manufacturer", "model"):
+        value = result.get(field)
 
-    if model is not None:
-        if not isinstance(model, str):
-            raise ValueError("model must be a string or null.")
+        if value is not None:
+            if not isinstance(value, str):
+                raise ValueError(f"{field} must be a string or null.")
 
-        model = model.strip() or None
+            value = value.strip() or None
 
-        if model and len(model) > 100:
-            raise ValueError("model is too long.")
+            if value and len(value) > 100:
+                raise ValueError(f"{field} is too long.")
 
-    suggestion["model"] = model
+        suggestion[field] = value
 
     if suggestion["condition"] not in {
         "Good",

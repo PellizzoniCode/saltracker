@@ -8,12 +8,14 @@ Amazon API Gateway uses a Cognito authorizer to validate the ID token before all
 
 ## Groups and Permissions
 
+See `docs/role-permissions.md` for the full action-by-role matrix; this document summarizes the Cognito groups.
+
 | Cognito group | Asset access | Create assets | Update assets | Maintenance access | AI recommendations |
 |---|---|---:|---:|---|---:|
-| Administrator | All assets | Yes | All fields | View and create | Yes |
+| Administrator | All assets | Yes | All fields | View, create, edit and delete | Yes |
 | Auditor | All assets | No | No | View only | No |
 | Manager | Assets in assigned department | No | No | View department history | No |
-| Technician | Assets in assigned department | Yes | Operational fields only | View and create | Yes |
+| Technician | Assets in assigned department | Yes | Operational fields only | View, create, and edit own records in own department | Yes |
 | Employee | Assets assigned to the user | No | No | View authorized records only | No |
 
 ## Authorization Rules
@@ -25,7 +27,7 @@ Administrators have full application access, including:
 - Creating assets
 - Viewing all assets
 - Updating all supported asset fields
-- Viewing and creating maintenance records
+- Viewing, creating, editing and deleting maintenance records
 - Generating AI-assisted maintenance recommendations
 - Viewing authorized private photographs
 
@@ -57,7 +59,7 @@ Technicians are restricted to their assigned department:
 - View department assets
 - Create assets
 - Update approved operational fields
-- Create maintenance records
+- Create maintenance records, and edit their own department's records
 - Generate AI-assisted maintenance recommendations
 - Access photographs for authorized assets
 
