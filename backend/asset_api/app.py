@@ -46,6 +46,7 @@ TRANSACTIONS = boto3.client("dynamodb")
 S3 = boto3.client("s3")
 PHOTO_BUCKET = os.environ.get("ASSET_PHOTO_BUCKET")
 PHOTO_URL_EXPIRES_IN = 300
+ASSET_SUB_RESOURCE_ROUTES = ("/photo", "/maintenance", "/maintenance-recommendation")
 SERIALIZER = TypeSerializer()
 
 PENDING_PREFIX = "pending/"
@@ -1250,7 +1251,11 @@ def lambda_handler(event, _context):
         if method == "GET":
             return _list(event, claims, groups)
 
-        if method == "PUT" and asset_id:
+        if (
+            method == "PUT"
+            and asset_id
+            and not route.endswith(ASSET_SUB_RESOURCE_ROUTES)
+        ):
             return _update(event, asset_id, claims, groups)
 
         return response(

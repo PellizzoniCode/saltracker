@@ -6,6 +6,8 @@ Monitoring is defined in `infrastructure/template.yaml` and deploys with the res
 - Lambda error and throttle alarms for the asset API and photo-analysis functions
 - A photo-upload error alarm
 - An API Gateway 5XX alarm
+- DynamoDB read and write throttle alarms for the asset table
+- A `smart-asset-lifecycle-<env>` dashboard (see below)
 - An SNS topic, with an optional email subscription
 
 ## Configure
@@ -93,6 +95,19 @@ This procedure was verified end to end on a test stack (see the PR description).
 If you would rather not import, the alternative is to export each group to S3 (`aws logs create-export-task`) and then delete it before deploying; that keeps an archive but loses the live logs.
 
 Any CloudWatch alarms or SNS topic/subscription created by the old script are unrelated to the ones this template manages and can be deleted separately once you've confirmed the new ones are in place.
+
+## Dashboard
+
+The stack also deploys a CloudWatch dashboard named `smart-asset-lifecycle-<Environment>` (stack output `CloudWatchDashboardName`). It shows:
+
+- Asset API Lambda invocations, errors, throttles and average duration
+- API Gateway request count, 4XX and 5XX responses
+- Maintenance scheduler invocations and errors
+- DynamoDB consumed read/write capacity and throttle events
+
+The two DynamoDB alarms (`smart-asset-table-<env>-read-throttles` and `smart-asset-table-<env>-write-throttles`) notify the same SNS topic as the other alarms.
+
+The CI deploy roles are allowed to manage this dashboard (`Dashboards` statement in `infrastructure/ci-bootstrap.yaml`). Redeploy the bootstrap stack before the first pipeline deploy that includes it, or the deploy fails with `AccessDenied` on `cloudwatch:PutDashboard`.
 
 ## Inspect
 
