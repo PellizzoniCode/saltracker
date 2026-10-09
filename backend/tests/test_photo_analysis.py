@@ -129,6 +129,16 @@ class ValidateSuggestionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.module.validate_suggestion(json.dumps(payload))
 
+    def test_prompt_does_not_show_null_for_required_estimates(self):
+        self.assertNotIn('"usefulLifeMonths": null', self.module.PROMPT)
+        self.assertNotIn('"estimatedValueUsd": null', self.module.PROMPT)
+
+    def test_null_useful_life_and_value_rejected(self):
+        for field in ("usefulLifeMonths", "estimatedValueUsd"):
+            payload = {**VALID_RESPONSE, field: None}
+            with self.assertRaises(ValueError):
+                self.module.validate_suggestion(json.dumps(payload))
+
     def test_empty_category_rejected(self):
         payload = {**VALID_RESPONSE, "category": ""}
         with self.assertRaises(ValueError):
