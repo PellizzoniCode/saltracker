@@ -45,8 +45,8 @@ Return only one valid JSON object with exactly these fields:
   "model": null,
   "description": "string",
   "condition": "Good, Fair, Poor, or Unknown",
-  "usefulLifeMonths": null,
-  "estimatedValueUsd": null,
+  "usefulLifeMonths": 48,
+  "estimatedValueUsd": 500,
   "estimatedProductionDate": null,
   "maintenanceCategory": "string"
 }
@@ -96,10 +96,10 @@ Additional rules:
 - Do not guess an exact model from general appearance alone.
 - Estimate usefulLifeMonths from the asset category, visible age, apparent
   condition, and a typical enterprise lifecycle.
-- usefulLifeMonths must be an integer between 12 and 120.
+- usefulLifeMonths is required and must be an integer between 12 and 120.
 - Estimate estimatedValueUsd from the identified category, model when known,
-  visible age, and condition. Return a whole-number USD estimate between 1
-  and 100000. This is an indicative estimate, not a purchase price or appraisal.
+  visible age, and condition. estimatedValueUsd is required: return a
+  whole-number USD estimate between 1 and 100000. This is an indicative estimate, not a purchase price or appraisal.
 - Set estimatedProductionDate in YYYY-MM-DD format only when an exact date is
   visible on the asset or its label. Otherwise return null.
 - Describe the asset in five to twelve words.
