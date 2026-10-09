@@ -143,6 +143,26 @@ class SecurityRequirementTests(unittest.TestCase):
         self.assertEqual(result["statusCode"], 405)
         self.assertEqual(body["error"], "MethodNotAllowed")
 
+    def test_put_on_asset_sub_resources_is_rejected(self):
+        for resource in (
+            "/assets/{assetId}/photo",
+            "/assets/{assetId}/maintenance",
+            "/assets/{assetId}/maintenance-recommendation",
+        ):
+            with self.subTest(resource=resource):
+                event = authenticated_event(
+                    "PUT",
+                    resource,
+                    asset_id="AST-SECURITY",
+                    body=json.dumps({"condition": "Poor"}),
+                )
+
+                result = self.api.lambda_handler(event, None)
+
+                self.assertEqual(result["statusCode"], 405)
+                self.table.put_item.assert_not_called()
+                self.transactions.transact_write_items.assert_not_called()
+
     def test_employee_cannot_read_another_users_asset(self):
         protected_asset = {
             **ASSET,

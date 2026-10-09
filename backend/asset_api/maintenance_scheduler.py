@@ -1,10 +1,8 @@
 """Scheduled maintenance evaluation and notification."""
 
-import json
 import logging
 import os
 from datetime import date, datetime, timezone
-from decimal import Decimal
 
 import boto3
 
@@ -13,12 +11,6 @@ from maintenance_recommendation import calculate_maintenance_recommendation
 
 LOGGER = logging.getLogger()
 LOGGER.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
-
-
-def _json_default(value):
-    if isinstance(value, Decimal):
-        return str(value)
-    raise TypeError(f"Cannot serialize {type(value)}")
 
 
 def _as_of_date(event):

@@ -1140,7 +1140,7 @@ if (maintenanceAsset) {
       <dd>{analysis.maintenanceCategory || "—"}</dd>
 
       <dt>Review status</dt>
-      <dd>{analysis.reviewStatus || "—"}</dd>
+      <dd>{analysis.reviewStatus || "Needs review"}</dd>
     </dl>
 
     <div className="analysis-actions">
