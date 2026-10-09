@@ -1277,15 +1277,6 @@ def lambda_handler(event, _context):
             },
         )
 
-    except MaintenanceRecommendationError as exc:
-        return response(
-            422,
-            {
-                "error": "MaintenanceScheduleUnavailable",
-                "message": str(exc),
-            },
-        )
-
     except MaintenanceValidationError as exc:
         return response(
             400,

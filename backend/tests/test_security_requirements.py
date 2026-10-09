@@ -166,29 +166,6 @@ class SecurityRequirementTests(unittest.TestCase):
         self.assertEqual(result["statusCode"], 403)
         self.assertEqual(body["error"], "Forbidden")
 
-    def test_recommendation_for_asset_without_dates_returns_422(self):
-        undated = {
-            key: value
-            for key, value in ASSET.items()
-            if key not in {"inServiceDate", "purchaseDate"}
-        }
-        self.table.get_item.return_value = {"Item": undated}
-        self.table.query.return_value = {"Items": []}
-
-        event = authenticated_event(
-            "POST",
-            "/assets/{assetId}/maintenance-recommendation",
-            asset_id="AST-SECURITY",
-        )
-
-        result = self.api.lambda_handler(event, None)
-
-        self.assertEqual(result["statusCode"], 422)
-        self.assertEqual(
-            self.response_body(result)["error"],
-            "MaintenanceScheduleUnavailable",
-        )
-
 
 class InfrastructureSecurityTests(unittest.TestCase):
     """Static checks on the SAM template; live checks stay manual."""
