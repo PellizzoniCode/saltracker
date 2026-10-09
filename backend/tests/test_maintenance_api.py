@@ -385,6 +385,51 @@ class MaintenanceApiTests(unittest.TestCase):
             body["message"],
         )
 
+    def test_bedrock_client_error_returns_502(self):
+        self.table.query.return_value = {"Items": []}
+
+        with patch.object(
+            self.api,
+            "generate_maintenance_advice",
+            side_effect=self.api.ClientError(
+                {"Error": {"Code": "ThrottlingException"}}
+            ),
+        ):
+            result = self.api.lambda_handler(
+                self.recommendation_event(),
+                None,
+            )
+
+        body = json.loads(result["body"])
+
+        self.assertEqual(result["statusCode"], 502)
+        self.assertEqual(body["error"], "AiRecommendationError")
+        self.assertNotIn("Throttling", body["message"])
+
+    def test_asset_without_dates_returns_422_without_calling_bedrock(self):
+        self.table.query.return_value = {"Items": []}
+        undated = {
+            key: value
+            for key, value in ASSET.items()
+            if key not in {"purchaseDate", "inServiceDate"}
+        }
+        self.table.get_item.return_value = {"Item": undated}
+
+        with patch.object(
+            self.api,
+            "generate_maintenance_advice",
+        ) as generate:
+            result = self.api.lambda_handler(
+                self.recommendation_event(),
+                None,
+            )
+
+        body = json.loads(result["body"])
+
+        self.assertEqual(result["statusCode"], 422)
+        self.assertEqual(body["error"], "ScheduleUnavailable")
+        generate.assert_not_called()
+
     def test_list_maintenance_reads_every_page(self):
         first = dict(RECORD)
         second = {

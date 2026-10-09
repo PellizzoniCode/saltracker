@@ -1158,16 +1158,29 @@ def _generate_maintenance_recommendation(
 
     clean_asset = _clean_asset(asset)
 
-    schedule = calculate_maintenance_recommendation(
-        clean_asset,
-        maintenance_history=history,
-    )
+    try:
+        schedule = calculate_maintenance_recommendation(
+            clean_asset,
+            maintenance_history=history,
+        )
+    except MaintenanceRecommendationError as exc:
+        return response(
+            422,
+            {
+                "error": "ScheduleUnavailable",
+                "message": str(exc),
+            },
+        )
 
-    ai_recommendation = generate_maintenance_advice(
-        clean_asset,
-        history,
-        schedule,
-    )
+    try:
+        ai_recommendation = generate_maintenance_advice(
+            clean_asset,
+            history,
+            schedule,
+        )
+    except ClientError as exc:
+        LOGGER.warning("Bedrock maintenance request failed: %s", exc)
+        raise MaintenanceAiError("Bedrock request failed.") from exc
 
     LOGGER.info(
         "AI maintenance recommendation generated "
