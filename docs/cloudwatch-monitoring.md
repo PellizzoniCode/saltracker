@@ -107,6 +107,8 @@ The stack also deploys a CloudWatch dashboard named `smart-asset-lifecycle-<Envi
 
 The two DynamoDB alarms (`smart-asset-table-<env>-read-throttles` and `smart-asset-table-<env>-write-throttles`) notify the same SNS topic as the other alarms.
 
+The CI deploy roles are allowed to manage this dashboard (`Dashboards` statement in `infrastructure/ci-bootstrap.yaml`). Redeploy the bootstrap stack before the first pipeline deploy that includes it, or the deploy fails with `AccessDenied` on `cloudwatch:PutDashboard`.
+
 ## Inspect
 
 List the alarms:

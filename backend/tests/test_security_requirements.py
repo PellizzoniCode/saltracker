@@ -224,6 +224,24 @@ class InfrastructureSecurityTests(unittest.TestCase):
         ):
             self.assertIn(f"{setting}: true", block)
 
+    def test_deploy_roles_may_manage_the_dashboard_and_new_alarms(self):
+        bootstrap = (REPO_ROOT / "infrastructure" / "ci-bootstrap.yaml").read_text()
+
+        for env in ("dev", "prod"):
+            self.assertIn(
+                f":dashboard/smart-asset-lifecycle-{env}", bootstrap
+            )
+
+        self.assertIn(
+            "DashboardName: !Sub smart-asset-lifecycle-${Environment}",
+            self.template,
+        )
+        for alarm in ("read-throttles", "write-throttles"):
+            self.assertIn(
+                f"AlarmName: !Sub smart-asset-table-${{Environment}}-{alarm}",
+                self.template,
+            )
+
     def test_photo_urls_are_short_lived(self):
         api, *_ = _load_api()
 
