@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Authenticator } from "@aws-amplify/ui-react";
 import { api } from "./api/client.js";
+import { DetailList } from "./components/DetailList.jsx";
+import { Notice } from "./components/Notice.jsx";
+import { PageHeader } from "./components/PageHeader.jsx";
+import { Panel } from "./components/Panel.jsx";
+import { SectionHeading } from "./components/SectionHeading.jsx";
+import { StatusBadge } from "./components/StatusBadge.jsx";
 import { emptyAsset } from "./constants/asset.js";
 import { emptyMaintenance } from "./constants/maintenance.js";
 import { useIdentity } from "./hooks/useIdentity.js";
@@ -210,18 +216,11 @@ function MaintenancePage({
 
   return (
     <main>
-      <header>
-        <div>
-          <p className="eyebrow">
-            MAINTENANCE INTELLIGENCE
-          </p>
-          <h1>Maintenance history and recommendations</h1>
-          <p>
-            Signed in as{" "}
-            {user?.signInDetails?.loginId}
-          </p>
-        </div>
-
+      <PageHeader
+        eyebrow="MAINTENANCE INTELLIGENCE"
+        title="Maintenance history and recommendations"
+        user={user}
+      >
         <div className="header-actions">
           <button
             type="button"
@@ -239,122 +238,89 @@ function MaintenancePage({
             Sign out
           </button>
         </div>
-      </header>
+      </PageHeader>
 
       {maintenanceMessage && (
-        <div className="notice" role="status">
-          {maintenanceMessage}
-        </div>
+        <Notice>{maintenanceMessage}</Notice>
       )}
 
-      <section className="panel">
-        <div className="section-heading">
-          <div>
-            <h2>{asset.assetTag}</h2>
-            <p>{asset.description}</p>
-          </div>
+      <Panel>
+        <SectionHeading
+          title={asset.assetTag}
+          description={<p>{asset.description}</p>}
+        >
+          <StatusBadge>{asset.status || "Unknown"}</StatusBadge>
+        </SectionHeading>
 
-          <span className="status">
-            {asset.status || "Unknown"}
-          </span>
-        </div>
+        <DetailList
+          className="asset-summary"
+          grouped
+          items={[
+            { label: "Asset ID", value: asset.assetId },
+            { label: "Category", value: asset.category || "—" },
+            { label: "Condition", value: asset.condition || "—" },
+            { label: "Location", value: asset.location || "—" },
+            {
+              label: "In-service date",
+              value: asset.inServiceDate || "—",
+            },
+          ]}
+        />
+      </Panel>
 
-        <dl className="asset-summary">
-          <div>
-            <dt>Asset ID</dt>
-            <dd>{asset.assetId}</dd>
-          </div>
-
-          <div>
-            <dt>Category</dt>
-            <dd>{asset.category || "—"}</dd>
-          </div>
-
-          <div>
-            <dt>Condition</dt>
-            <dd>{asset.condition || "—"}</dd>
-          </div>
-
-          <div>
-            <dt>Location</dt>
-            <dd>{asset.location || "—"}</dd>
-          </div>
-
-          <div>
-            <dt>In-service date</dt>
-            <dd>{asset.inServiceDate || "—"}</dd>
-          </div>
-        </dl>
-      </section>
-
-      <section className="panel">
+      <Panel>
         <h2>Depreciation</h2>
 
         {asset.depreciation ? (
-          <dl className="asset-summary">
-            <div>
-              <dt>Original purchase value</dt>
-              <dd>
-                {formatMoney(
+          <DetailList
+            className="asset-summary"
+            grouped
+            items={[
+              {
+                label: "Original purchase value",
+                value: formatMoney(
                   asset.depreciation.originalPurchaseValue
-                )}
-              </dd>
-            </div>
-
-            <div>
-              <dt>Annual depreciation</dt>
-              <dd>
-                {formatMoney(
+                ),
+              },
+              {
+                label: "Annual depreciation",
+                value: formatMoney(
                   asset.depreciation.annualDepreciation
-                )}
-              </dd>
-            </div>
-
-            <div>
-              <dt>Accumulated depreciation</dt>
-              <dd>
-                {formatMoney(
+                ),
+              },
+              {
+                label: "Accumulated depreciation",
+                value: formatMoney(
                   asset.depreciation.accumulatedDepreciation
-                )}
-              </dd>
-            </div>
-
-            <div>
-              <dt>Current book value</dt>
-              <dd>
-                {formatMoney(
+                ),
+              },
+              {
+                label: "Current book value",
+                value: formatMoney(
                   asset.depreciation.currentBookValue
-                )}
-              </dd>
-            </div>
-
-            <div>
-              <dt>Useful life consumed</dt>
-              <dd>
-                {`${asset.depreciation.usefulLifeConsumedPercent}%`}
-              </dd>
-            </div>
-
-            <div>
-              <dt>Estimated replacement date</dt>
-              <dd>
-                {asset.depreciation.estimatedReplacementDate}
-              </dd>
-            </div>
-          </dl>
+                ),
+              },
+              {
+                label: "Useful life consumed",
+                value: `${asset.depreciation.usefulLifeConsumedPercent}%`,
+              },
+              {
+                label: "Estimated replacement date",
+                value: asset.depreciation.estimatedReplacementDate,
+              },
+            ]}
+          />
         ) : (
           <p>
             Depreciation is unavailable because the asset is
             missing financial or in-service information.
           </p>
         )}
-      </section>
+      </Panel>
 
       <section className="maintenance-grid">
-        <article className="panel">
-          <div className="section-heading">
-            <h2>Calculated schedule</h2>
-
+        <Panel as="article">
+          <SectionHeading title="Calculated schedule">
             {schedule?.maintenanceStatus && (
               <span
                 className={`maintenance-status maintenance-${schedule.maintenanceStatus.toLowerCase()}`}
@@ -362,48 +328,46 @@ function MaintenancePage({
                 {schedule.maintenanceStatus}
               </span>
             )}
-          </div>
+          </SectionHeading>
 
           {loading ? (
             <p>Loading maintenance schedule...</p>
           ) : schedule ? (
-            <dl className="recommendation-details">
-              <dt>Priority</dt>
-              <dd>{schedule.priority || "—"}</dd>
-
-              <dt>Recommended cleaning</dt>
-              <dd>
-                {schedule.recommendedCleaningDate || "—"}
-              </dd>
-
-              <dt>Recommended maintenance</dt>
-              <dd>
-                {schedule.recommendedMaintenanceDate ||
-                  "—"}
-              </dd>
-
-              <dt>Days until maintenance</dt>
-              <dd>
-                {schedule.daysUntilMaintenance ??
-                  "—"}
-              </dd>
-
-              <dt>Recommendation</dt>
-              <dd>
-                {schedule.recommendation ||
-                  schedule.message ||
-                  "—"}
-              </dd>
-            </dl>
+            <DetailList
+              className="recommendation-details"
+              items={[
+                {
+                  label: "Priority",
+                  value: schedule.priority || "—",
+                },
+                {
+                  label: "Recommended cleaning",
+                  value: schedule.recommendedCleaningDate || "—",
+                },
+                {
+                  label: "Recommended maintenance",
+                  value: schedule.recommendedMaintenanceDate || "—",
+                },
+                {
+                  label: "Days until maintenance",
+                  value: schedule.daysUntilMaintenance ?? "—",
+                },
+                {
+                  label: "Recommendation",
+                  value:
+                    schedule.recommendation ||
+                    schedule.message ||
+                    "—",
+                },
+              ]}
+            />
           ) : (
             <p>No schedule is available.</p>
           )}
-        </article>
+        </Panel>
 
-        <article className="panel">
-          <div className="section-heading">
-            <h2>Bedrock recommendation</h2>
-
+        <Panel as="article">
+          <SectionHeading title="Bedrock recommendation">
             <button
               type="button"
               onClick={generateAiRecommendation}
@@ -413,22 +377,27 @@ function MaintenancePage({
                 ? "Generating..."
                 : "Generate recommendation"}
             </button>
-          </div>
+          </SectionHeading>
 
           {aiRecommendation ? (
             <div className="ai-maintenance-result">
-              <dl className="recommendation-details">
-                <dt>Risk level</dt>
-                <dd>{aiRecommendation.riskLevel}</dd>
-
-                <dt>Review status</dt>
-                <dd>
-                  {aiRecommendation.reviewStatus}
-                </dd>
-
-                <dt>Rationale</dt>
-                <dd>{aiRecommendation.rationale}</dd>
-              </dl>
+              <DetailList
+                className="recommendation-details"
+                items={[
+                  {
+                    label: "Risk level",
+                    value: aiRecommendation.riskLevel,
+                  },
+                  {
+                    label: "Review status",
+                    value: aiRecommendation.reviewStatus,
+                  },
+                  {
+                    label: "Rationale",
+                    value: aiRecommendation.rationale,
+                  },
+                ]}
+              />
 
               <h3>Recommended actions</h3>
 
@@ -449,10 +418,10 @@ function MaintenancePage({
               calculated schedule.
             </p>
           )}
-        </article>
+        </Panel>
       </section>
 
-      <section className="panel">
+      <Panel>
         <h2>
           {editingMaintenanceId
             ? `Edit maintenance ${editingMaintenanceId}`
@@ -562,12 +531,10 @@ function MaintenancePage({
             </button>
           )}
         </form>
-      </section>
+      </Panel>
 
-      <section className="panel">
-        <div className="section-heading">
-          <h2>Maintenance history</h2>
-
+      <Panel>
+        <SectionHeading title="Maintenance history">
           <button
             type="button"
             className="secondary"
@@ -576,7 +543,7 @@ function MaintenancePage({
           >
             Refresh
           </button>
-        </div>
+        </SectionHeading>
 
         <div className="table-wrap">
           <table>
@@ -654,7 +621,7 @@ function MaintenancePage({
             </tbody>
           </table>
         </div>
-      </section>
+      </Panel>
     </main>
   );
 }
@@ -991,18 +958,17 @@ if (maintenanceAsset) {
 
   return (
     <main>
-      <header>
-        <div>
-          <p className="eyebrow">AWS CLOUD SECURITY PORTFOLIO</p>
-          <h1>Smart Asset Lifecycle Tracker</h1>
-          <p>Signed in as {user?.signInDetails?.loginId}</p>
-        </div>
+      <PageHeader
+        eyebrow="AWS CLOUD SECURITY PORTFOLIO"
+        title="Smart Asset Lifecycle Tracker"
+        user={user}
+      >
         <button className="secondary" onClick={signOut}>Sign out</button>
-      </header>
+      </PageHeader>
 
-      {message && <div className="notice" role="status">{message}</div>}
+      {message && <Notice>{message}</Notice>}
 
-      <section className="panel">
+      <Panel>
         <h2>Register an asset manually</h2>
         <form onSubmit={createAsset}>
           {Object.entries(form).filter(([name]) => name !== "imageKey").map(([name, value]) => (
@@ -1038,35 +1004,29 @@ if (maintenanceAsset) {
   <div className="analysis-result">
     <h3>Bedrock suggestions</h3>
 
-    <dl>
-      <dt>Category</dt>
-      <dd>{analysis.category || "—"}</dd>
-
-      <dt>Description</dt>
-      <dd>{analysis.description || "—"}</dd>
-
-      <dt>Condition</dt>
-      <dd>{analysis.condition || "—"}</dd>
-
-      <dt>Manufacturer</dt>
-      <dd>{analysis.manufacturer || "—"}</dd>
-
-      <dt>Model</dt>
-      <dd>{analysis.model || "—"}</dd>
-
-      <dt>Useful life</dt>
-      <dd>
-        {analysis.usefulLifeMonths
-          ? `${analysis.usefulLifeMonths} months`
-          : "—"}
-      </dd>
-
-      <dt>Maintenance category</dt>
-      <dd>{analysis.maintenanceCategory || "—"}</dd>
-
-      <dt>Review status</dt>
-      <dd>{analysis.reviewStatus || "Needs review"}</dd>
-    </dl>
+    <DetailList
+      items={[
+        { label: "Category", value: analysis.category || "—" },
+        { label: "Description", value: analysis.description || "—" },
+        { label: "Condition", value: analysis.condition || "—" },
+        { label: "Manufacturer", value: analysis.manufacturer || "—" },
+        { label: "Model", value: analysis.model || "—" },
+        {
+          label: "Useful life",
+          value: analysis.usefulLifeMonths
+            ? `${analysis.usefulLifeMonths} months`
+            : "—",
+        },
+        {
+          label: "Maintenance category",
+          value: analysis.maintenanceCategory || "—",
+        },
+        {
+          label: "Review status",
+          value: analysis.reviewStatus || "Needs review",
+        },
+      ]}
+    />
 
     <div className="analysis-actions">
       <button
@@ -1091,17 +1051,18 @@ if (maintenanceAsset) {
             {saving ? "Creating..." : "Create asset"}
           </button>
         </form>
-      </section>
-            <section className="panel gallery-panel">
-        <div className="section-heading">
-          <div>
-            <h2>Asset photo gallery</h2>
+      </Panel>
+
+      <Panel className="gallery-panel">
+        <SectionHeading
+          title="Asset photo gallery"
+          description={
             <p className="gallery-intro">
               Only photographs for assets authorized by your Cognito
               role are shown.
             </p>
-          </div>
-
+          }
+        >
           <button
             type="button"
             className="secondary gallery-refresh"
@@ -1112,13 +1073,9 @@ if (maintenanceAsset) {
               ? "Loading..."
               : "Refresh gallery"}
           </button>
-        </div>
+        </SectionHeading>
 
-        {galleryMessage && (
-          <div className="notice" role="status">
-            {galleryMessage}
-          </div>
-        )}
+        {galleryMessage && <Notice>{galleryMessage}</Notice>}
 
         {!galleryLoading && !galleryItems.length && (
           <p className="gallery-empty">
@@ -1159,9 +1116,7 @@ if (maintenanceAsset) {
                       </h3>
                     </div>
 
-                    <span className="status">
-                      {asset.status}
-                    </span>
+                    <StatusBadge>{asset.status}</StatusBadge>
                   </div>
 
                   <p>
@@ -1169,13 +1124,19 @@ if (maintenanceAsset) {
                       "No description provided."}
                   </p>
 
-                  <dl className="asset-photo-meta">
-                    <dt>Department</dt>
-                    <dd>{asset.department || "—"}</dd>
-
-                    <dt>Condition</dt>
-                    <dd>{asset.condition || "—"}</dd>
-                  </dl>
+                  <DetailList
+                    className="asset-photo-meta"
+                    items={[
+                      {
+                        label: "Department",
+                        value: asset.department || "—",
+                      },
+                      {
+                        label: "Condition",
+                        value: asset.condition || "—",
+                      },
+                    ]}
+                  />
 
                   <div className="gallery-analysis">
                     <div className="gallery-analysis-heading">
@@ -1187,29 +1148,29 @@ if (maintenanceAsset) {
                     </div>
 
                     {suggestion ? (
-                      <dl>
-                        <dt>Detected category</dt>
-                        <dd>
-                          {suggestion.category || "—"}
-                        </dd>
-
-                        <dt>Description</dt>
-                        <dd>
-                          {suggestion.description || "—"}
-                        </dd>
-
-                        <dt>Maintenance</dt>
-                        <dd>
-                          {suggestion.maintenanceCategory ||
-                            "—"}
-                        </dd>
-
-                        <dt>Review</dt>
-                        <dd>
-                          {suggestion.reviewStatus ||
-                            "Needs review"}
-                        </dd>
-                      </dl>
+                      <DetailList
+                        items={[
+                          {
+                            label: "Detected category",
+                            value: suggestion.category || "—",
+                          },
+                          {
+                            label: "Description",
+                            value: suggestion.description || "—",
+                          },
+                          {
+                            label: "Maintenance",
+                            value:
+                              suggestion.maintenanceCategory || "—",
+                          },
+                          {
+                            label: "Review",
+                            value:
+                              suggestion.reviewStatus ||
+                              "Needs review",
+                          },
+                        ]}
+                      />
                     ) : (
                       <p>
                         The AI analysis is still processing or
@@ -1222,17 +1183,15 @@ if (maintenanceAsset) {
             );
           })}
         </div>
-      </section>
+      </Panel>
 
-      <section className="panel">
-        <div className="section-heading">
-          <h2>Authorized inventory</h2>
-
+      <Panel>
+        <SectionHeading title="Authorized inventory">
           <div className="search">
             <input aria-label="Search assets" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search tag or description" />
             <button className="secondary" onClick={loadAssets}>Search</button>
           </div>
-        </div>
+        </SectionHeading>
         <div className="table-wrap">
           <table>
   <thead>
@@ -1256,9 +1215,7 @@ if (maintenanceAsset) {
         <td>{asset.department || "—"}</td>
         <td>{asset.location || "—"}</td>
         <td>
-          <span className="status">
-            {asset.status}
-          </span>
+          <StatusBadge>{asset.status}</StatusBadge>
         </td>
         <td>
           <button
@@ -1288,7 +1245,7 @@ if (maintenanceAsset) {
             Load more
           </button>
         )}
-      </section>
+      </Panel>
     </main>
   );
 }
