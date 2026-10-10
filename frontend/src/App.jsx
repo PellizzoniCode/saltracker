@@ -1,85 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Authenticator } from "@aws-amplify/ui-react";
-import { fetchAuthSession } from "aws-amplify/auth";
-
-const API_URL = import.meta.env.VITE_API_URL;
-
-const emptyAsset = {
-  assetTag: "",
-  category: "Laptop",
-  description: "",
-  manufacturer: "",
-  model: "",
-  serialNumber: "",
-  purchaseDate: "",
-  inServiceDate: "",
-  purchaseValue: "",
-  salvageValue: "0.00",
-  usefulLifeMonths: 48,
-  department: "",
-  location: "",
-  assignedUserId: "",
-  condition: "Good",
-  status: "Available",
-  imageKey: "",
-};
-
-async function api(path, options = {}) {
-  const session = await fetchAuthSession();
-  const token = session.tokens?.idToken?.toString();
-  const result = await fetch(`${API_URL}${path}`, {
-    ...options,
-    headers: { "Content-Type": "application/json", Authorization: token, ...options.headers },
-  });
-  const body = await result.json();
-  if (!result.ok) throw new Error(body.message || "Request failed");
-  return body;
-}
-
-// Mirrors the backend rules so the UI only offers actions the API will
-// allow. The API remains the authority.
-function useIdentity() {
-  const [identity, setIdentity] = useState(null);
-
-  useEffect(() => {
-    let active = true;
-
-    fetchAuthSession()
-      .then((session) => {
-        const payload = session.tokens?.idToken?.payload || {};
-
-        if (active) {
-          setIdentity({
-            sub: payload.sub,
-            groups: new Set(payload["cognito:groups"] || []),
-            department: payload["custom:department"],
-          });
-        }
-      })
-      .catch(() => {
-        if (active) setIdentity(null);
-      });
-
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  return identity;
-}
-
-function formatMoney(value) {
-  return value === undefined || value === null ? "—" : `$${value}`;
-}
-
-const emptyMaintenance = {
-  maintenanceType: "Preventive",
-  description: "",
-  performedDate: "",
-  conditionAfter: "",
-  nextMaintenanceDate: "",
-  cost: "0.00",
-};
+import { api } from "./api/client.js";
+import { emptyAsset } from "./constants/asset.js";
+import { emptyMaintenance } from "./constants/maintenance.js";
+import { useIdentity } from "./hooks/useIdentity.js";
+import { formatMoney } from "./utils/format.js";
 
 function MaintenancePage({
   asset,
