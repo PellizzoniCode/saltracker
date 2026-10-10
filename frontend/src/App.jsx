@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Authenticator } from "@aws-amplify/ui-react";
 import { api } from "./api/client.js";
-import { DetailList } from "./components/DetailList.jsx";
 import { Notice } from "./components/Notice.jsx";
 import { PageHeader } from "./components/PageHeader.jsx";
 import { Panel } from "./components/Panel.jsx";
 import { SectionHeading } from "./components/SectionHeading.jsx";
-import { StatusBadge } from "./components/StatusBadge.jsx";
 import { emptyAsset } from "./constants/asset.js";
+import { AnalysisSuggestions } from "./features/assets/AnalysisSuggestions.jsx";
+import { AssetGallery } from "./features/assets/AssetGallery.jsx";
+import { AssetSearch } from "./features/assets/AssetSearch.jsx";
+import { AssetTable } from "./features/assets/AssetTable.jsx";
 import { MaintenancePage } from "./features/maintenance/MaintenancePage.jsx";
 
 function AssetApplication({ signOut, user }) {
@@ -385,50 +387,11 @@ if (maintenanceAsset) {
 )}
 
 {analysis && (
-  <div className="analysis-result">
-    <h3>Bedrock suggestions</h3>
-
-    <DetailList
-      items={[
-        { label: "Category", value: analysis.category || "—" },
-        { label: "Description", value: analysis.description || "—" },
-        { label: "Condition", value: analysis.condition || "—" },
-        { label: "Manufacturer", value: analysis.manufacturer || "—" },
-        { label: "Model", value: analysis.model || "—" },
-        {
-          label: "Useful life",
-          value: analysis.usefulLifeMonths
-            ? `${analysis.usefulLifeMonths} months`
-            : "—",
-        },
-        {
-          label: "Maintenance category",
-          value: analysis.maintenanceCategory || "—",
-        },
-        {
-          label: "Review status",
-          value: analysis.reviewStatus || "Needs review",
-        },
-      ]}
-    />
-
-    <div className="analysis-actions">
-      <button
-        type="button"
-        onClick={applyAnalysis}
-      >
-        Apply suggestions
-      </button>
-
-      <button
-        type="button"
-        className="secondary"
-        onClick={rejectAnalysis}
-      >
-        Reject suggestions
-      </button>
-    </div>
-  </div>
+  <AnalysisSuggestions
+    analysis={analysis}
+    onApply={applyAnalysis}
+    onReject={rejectAnalysis}
+  />
 )}
           </div>
           <button type="submit" disabled={saving || uploading}>
@@ -437,184 +400,25 @@ if (maintenanceAsset) {
         </form>
       </Panel>
 
-      <Panel className="gallery-panel">
-        <SectionHeading
-          title="Asset photo gallery"
-          description={
-            <p className="gallery-intro">
-              Only photographs for assets authorized by your Cognito
-              role are shown.
-            </p>
-          }
-        >
-          <button
-            type="button"
-            className="secondary gallery-refresh"
-            disabled={galleryLoading}
-            onClick={loadGallery}
-          >
-            {galleryLoading
-              ? "Loading..."
-              : "Refresh gallery"}
-          </button>
-        </SectionHeading>
-
-        {galleryMessage && <Notice>{galleryMessage}</Notice>}
-
-        {!galleryLoading && !galleryItems.length && (
-          <p className="gallery-empty">
-            No authorized assets with photographs were found.
-          </p>
-        )}
-
-        <div
-          className="asset-gallery"
-          aria-busy={galleryLoading}
-        >
-          {galleryItems.map((asset) => {
-            const suggestion = asset.suggestion;
-
-            return (
-              <article
-                className="asset-photo-card"
-                key={asset.assetId}
-              >
-                <img
-                  className="asset-gallery-image"
-                  src={asset.photoUrl}
-                  alt={`${asset.assetTag} ${
-                    asset.category || "asset"
-                  }`}
-                  loading="lazy"
-                />
-
-                <div className="asset-photo-content">
-                  <div className="asset-photo-title">
-                    <div>
-                      <p className="asset-photo-tag">
-                        {asset.assetTag}
-                      </p>
-                      <h3>
-                        {asset.category ||
-                          "Uncategorized asset"}
-                      </h3>
-                    </div>
-
-                    <StatusBadge>{asset.status}</StatusBadge>
-                  </div>
-
-                  <p>
-                    {asset.description ||
-                      "No description provided."}
-                  </p>
-
-                  <DetailList
-                    className="asset-photo-meta"
-                    items={[
-                      {
-                        label: "Department",
-                        value: asset.department || "—",
-                      },
-                      {
-                        label: "Condition",
-                        value: asset.condition || "—",
-                      },
-                    ]}
-                  />
-
-                  <div className="gallery-analysis">
-                    <div className="gallery-analysis-heading">
-                      <h4>Bedrock insight</h4>
-                      <span className="analysis-badge">
-                        {asset.analysisStatus ||
-                          "Processing"}
-                      </span>
-                    </div>
-
-                    {suggestion ? (
-                      <DetailList
-                        items={[
-                          {
-                            label: "Detected category",
-                            value: suggestion.category || "—",
-                          },
-                          {
-                            label: "Description",
-                            value: suggestion.description || "—",
-                          },
-                          {
-                            label: "Maintenance",
-                            value:
-                              suggestion.maintenanceCategory || "—",
-                          },
-                          {
-                            label: "Review",
-                            value:
-                              suggestion.reviewStatus ||
-                              "Needs review",
-                          },
-                        ]}
-                      />
-                    ) : (
-                      <p>
-                        The AI analysis is still processing or
-                        has no suggestion.
-                      </p>
-                    )}
-                  </div>
-                </div>
-              </article>
-            );
-          })}
-        </div>
-      </Panel>
+      <AssetGallery
+        items={galleryItems}
+        loading={galleryLoading}
+        message={galleryMessage}
+        onRefresh={loadGallery}
+      />
 
       <Panel>
         <SectionHeading title="Authorized inventory">
-          <div className="search">
-            <input aria-label="Search assets" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search tag or description" />
-            <button className="secondary" onClick={loadAssets}>Search</button>
-          </div>
+          <AssetSearch
+            query={query}
+            onQueryChange={setQuery}
+            onSearch={loadAssets}
+          />
         </SectionHeading>
-        <div className="table-wrap">
-          <table>
-  <thead>
-    <tr>
-      <th>Tag</th>
-      <th>Category</th>
-      <th>Description</th>
-      <th>Department</th>
-      <th>Location</th>
-      <th>Status</th>
-      <th>Maintenance</th>
-    </tr>
-  </thead>
-
-  <tbody>
-    {assets.map((asset) => (
-      <tr key={asset.assetId}>
-        <td>{asset.assetTag}</td>
-        <td>{asset.category}</td>
-        <td>{asset.description}</td>
-        <td>{asset.department || "—"}</td>
-        <td>{asset.location || "—"}</td>
-        <td>
-          <StatusBadge>{asset.status}</StatusBadge>
-        </td>
-        <td>
-          <button
-            type="button"
-            className="secondary table-action"
-            onClick={() => setMaintenanceAsset(asset)}
-          >
-            View maintenance
-          </button>
-        </td>
-      </tr>
-    ))}
-  </tbody>
-</table>
-        </div>
+        <AssetTable
+          assets={assets}
+          onViewMaintenance={setMaintenanceAsset}
+        />
 
         {nextToken && (
           <button
