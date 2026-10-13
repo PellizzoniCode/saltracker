@@ -4,7 +4,9 @@ A secure serverless asset-management application built with Amazon Cognito, API 
 
 ## Current milestone
 
-The starter implements the Week 1 foundation:
+The project has completed the Week 3 milestone. It now combines the Week 1
+serverless foundation, Week 2 secure photo intelligence, and Week 3 maintenance
+intelligence:
 
 - AWS SAM infrastructure
 - Cognito user pool and five application groups
@@ -13,7 +15,12 @@ The starter implements the Week 1 foundation:
 - Python Lambda REST API for create, list, view, and update
 - Backend RBAC and record-scope authorization
 - React login and manual asset-entry interface
-- Ten sample assets and unit tests
+- Private S3 photo storage and an authorized photo gallery
+- Amazon Bedrock photo analysis with human approval before applying suggestions
+- Maintenance history, deterministic lifecycle calculations, and AI-assisted recommendations
+- Straight-line depreciation calculated in application code rather than by the model
+- Scheduled maintenance evaluation with Amazon EventBridge and SNS notifications
+- Ten sample assets and automated backend tests
 - SailPoint-to-Cognito role mapping documentation
 
 ## Architecture
@@ -88,58 +95,6 @@ sam delete --stack-name smart-asset-tracker-dev
 `down --purge` deletes the retained table after deleting the stack; the retained
 photo bucket and its contents must be removed separately if no longer needed.
 
-## Set up the CI/CD pipeline
-
-Merging to `develop` deploys the dev stack, runs the smoke test and then publishes the frontend to Amplify, using GitHub Actions with OIDC, so no AWS keys are stored. Production is not deployed automatically yet. The pipeline does nothing until you complete this one-time setup (details and troubleshooting: [docs/ci-cd.md](docs/ci-cd.md)).
-
-**You need:** a non-production AWS account, admin credentials for the one-time step, and the [GitHub CLI](https://cli.github.com/) logged in with admin rights on your repository.
-
-1. **Deploy the bootstrap stack** once, with admin credentials. It creates the deploy roles GitHub assumes. Replace the placeholders; `GitHubSubjectPrefix` is only needed if the repository uses GitHub's immutable subject claim (read it with `gh api repos/<org>/<repo>/actions/oidc/customization/sub`, field `sub_claim_prefix`), and `ExistingOidcProviderArn` only if the account already has a GitHub OIDC provider:
-
-   ```bash
-   aws cloudformation deploy --template-file infrastructure/ci-bootstrap.yaml --stack-name saltracker-ci-bootstrap --region <region> --capabilities CAPABILITY_NAMED_IAM --parameter-overrides GitHubOrg=<org> GitHubRepo=<repo> GitHubSubjectPrefix=<sub_claim_prefix> ExistingOidcProviderArn=<oidc-provider-arn>
-   ```
-
-2. **Set the secret** the pipeline needs. Without `--body` it prompts, which keeps the account id out of your shell history:
-
-   ```bash
-   gh secret set AWS_ACCOUNT_ID
-   ```
-
-3. **Set variables** (`DEV_PHOTO_UPLOAD_ORIGINS` is required, the others have defaults; the repository is public, so never put account-specific values in variables, they are not masked in logs):
-
-   ```bash
-   gh variable set AWS_REGION --body "us-east-1"
-   ```
-
-   ```bash
-   gh variable set DEV_PHOTO_UPLOAD_ORIGINS --body "https://<branch>.<amplify-app-id>.amplifyapp.com,http://localhost:5173"
-   ```
-
-   ```bash
-   gh variable set DEV_AMPLIFY_APP_ID --body "<amplify-app-id>"
-   ```
-
-   ```bash
-   gh variable set DEV_AMPLIFY_BRANCH --body "<branch>"
-   ```
-
-   Leave the two Amplify variables unset to skip publishing the frontend. Publishing needs a manual-deploy Amplify app, created as described in [docs/ci-cd.md](docs/ci-cd.md#frontend-amplify).
-
-4. **Check** what is configured (secret values are never shown):
-
-   ```bash
-   gh secret list
-   ```
-
-   ```bash
-   gh variable list
-   ```
-
-5. **Merge to `develop`.** Watch the **Deploy** run in the Actions tab; the smoke-test report is on the run summary.
-
-If a run fails: a denied role assumption usually means a wrong `GitHubSubjectPrefix`, and a stack stuck in `UPDATE_ROLLBACK_FAILED` is recovered with `aws cloudformation continue-update-rollback`; both are covered in the [troubleshooting section](docs/ci-cd.md#troubleshooting).
-
 ## Run the frontend
 
 ```bash
@@ -170,7 +125,7 @@ For employee record scoping, set each asset's `assignedUserId` to the user's Cog
 - Technician updates are restricted to operational fields.
 - Financial values are validated with `Decimal`, never floating point.
 - Secrets and tokens must not be committed.
-- The current scan-based search is appropriate only for the small Week 1 dataset; production access patterns should use indexes.
+- The current scan-based search and scheduled evaluation are appropriate only for the small demonstration dataset; production access patterns should use indexes and partitioned or event-driven processing.
 
 ## Week 2: Secure Photo Intelligence
 
@@ -234,3 +189,78 @@ sam build --template-file infrastructure/template.yaml
 cd frontend
 npm ci
 npm run build
+```
+
+## Week 3: Maintenance Intelligence
+
+Week 3 extends the application from asset registration and secure photo
+analysis into maintenance history, lifecycle calculations, scheduled alerts,
+and AI-assisted recommendations. Deterministic application rules remain the
+source of truth for dates, status, priority, and financial calculations;
+Amazon Bedrock adds contextual guidance without replacing those controls.
+
+### Features completed
+
+- Maintenance records stored under each asset using the
+  `MAINTENANCE#<date>#<id>` DynamoDB sort-key pattern
+- Create, list, update, and delete maintenance operations with backend
+  validation and authorization
+- Authenticated Cognito identity recorded server-side as `performedBy` and
+  `performedByEmail`
+- Record-scope enforcement for Administrator, Manager, Technician, Auditor,
+  and Employee roles
+- Optimistic concurrency checks that return `409` for stale maintenance
+  updates
+- Atomic record movement when an edited maintenance date changes its sort key
+- Deterministic maintenance status, priority, recommended service date, and
+  cleaning date calculations
+- Condition-aware service intervals and maintenance-history-aware
+  recommendations
+- Straight-line depreciation using completed monthly anniversaries, useful
+  life, purchase value, and salvage value
+- Amazon Bedrock maintenance guidance returned as validated structured JSON
+- Human review of AI-generated guidance before operational action
+- EventBridge-driven maintenance evaluation and consolidated Amazon SNS alerts
+  for assets that are due soon or overdue
+- Error isolation so one malformed asset does not stop the scheduled evaluation
+
+### Security and AI boundaries
+
+- API Gateway validates the Cognito token before protected maintenance routes
+  are invoked.
+- Lambda authorizes access to the target asset before returning its maintenance
+  history or generating a recommendation.
+- Browser-supplied identity fields are ignored; performer identity comes from
+  verified Cognito claims.
+- Read-only roles cannot modify maintenance records, and Technician access is
+  limited to the permitted department and ownership scope.
+- Asset and maintenance context sent to Bedrock is explicitly selected and
+  minimized.
+- Bedrock does not calculate depreciation, maintenance dates, status, or
+  priority. Those values are calculated and validated by application code.
+- Invalid model JSON and Bedrock service errors fail safely instead of being
+  treated as approved recommendations.
+
+### Week 3 validation
+
+Run the complete automated suite and deployment checks:
+
+```bash
+python3 -m unittest discover -s backend/tests -v
+sam validate --template-file infrastructure/template.yaml
+sam build --template-file infrastructure/template.yaml
+
+cd frontend
+npm ci
+npm run build
+```
+
+The Week 3 coverage includes maintenance validation and authorization,
+pagination, concurrent updates, deterministic recommendations, depreciation,
+scheduled evaluation, SNS notification behavior, and Bedrock response and
+failure handling.
+
+See [`docs/depreciation.md`](docs/depreciation.md),
+[`docs/ai-recommendations.md`](docs/ai-recommendations.md), and the
+[`Week 3 architecture diagram`](docs/architecture/smart-asset-tracker-week-3-architecture.png)
+for the supporting design documentation.
